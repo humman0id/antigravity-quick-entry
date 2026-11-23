@@ -70,8 +70,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
 
         menu.addItem(.separator())
 
+        let modeLabel = appState.settings.deliveryTarget.isDesktopHandoff
+            ? "Target: \(appState.settings.deliveryTarget.shortLabel)"
+            : "Inline HUD: \(appState.acpClient.connectionState.label)"
         let acpStatusItem = NSMenuItem(
-            title: "Antigravity: \(appState.acpClient.connectionState.label)",
+            title: modeLabel,
             action: nil,
             keyEquivalent: ""
         )

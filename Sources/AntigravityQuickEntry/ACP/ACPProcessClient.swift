@@ -37,6 +37,9 @@ public final class ACPProcessClient: ObservableObject {
     @Published public private(set) var toolActivities: [ToolActivityItem] = []
     @Published public private(set) var pendingPermission: ACPPermissionRequest?
     @Published public private(set) var lastError: String?
+    @Published public private(set) var savedSessions: [SavedChatSession] = []
+    @Published public private(set) var activeSessionId: String?
+    @Published public private(set) var activeSessionTitle: String?
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -46,11 +49,13 @@ public final class ACPProcessClient: ObservableObject {
 
     private var nextRpcId: Int = 1
     private var pendingResponses: [Int: CheckedContinuation<JSONValue?, Error>] = [:]
-    private var activeSessionId: String?
     private var activeSessionCwd: String?
+    private var needsResumeBeforePrompt: Bool = false
     private var configuredCustomPath: String = ""
 
-    public init() {}
+    public init() {
+        self.savedSessions = SavedChatSession.loadAll()
+    }
 
     public func updateCustomBinaryPath(_ path: String) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,7 +98,7 @@ public final class ACPProcessClient: ObservableObject {
         lastError = nil
 
         guard let agyPath = resolveAgyExecutable() else {
-            let msg = "Could not find `agy` CLI. Install Antigravity CLI or set its path in Settings."
+            let msg = "Could not find `agy` CLI. Switch target to 'Desktop · Current Chat' to use Antigravity Desktop App directly, or install `agy` CLI."
             connectionState = .failed(msg)
             lastError = msg
             throw NSError(domain: "ACPProcessClient", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
@@ -149,10 +154,48 @@ public final class ACPProcessClient: ObservableObject {
         connectionState = .ready
     }
 
+    /// Queries `agy acp` for persisted sessions via `session/list` and merges them with locally saved chats.
+    public func refreshRemoteSessions() async {
+        guard resolveAgyExecutable() != nil else { return }
+        do {
+            try await ensureStarted()
+            let listId = allocateRpcId()
+            let payload = try ACPCodec.encodeSessionList(id: listId)
+            let result = try await sendRequest(id: listId, data: payload)
+            let remote = ACPCodec.parseSessionListResult(result)
+            guard !remote.isEmpty else { return }
+
+            var mergedById = Dictionary(uniqueKeysWithValues: savedSessions.map { ($0.id, $0) })
+            for item in remote {
+                if mergedById[item.id] == nil {
+                    mergedById[item.id] = item
+                }
+            }
+            savedSessions = Array(mergedById.values).sorted { $0.updatedAt > $1.updatedAt }
+            SavedChatSession.saveAll(savedSessions)
+        } catch {
+            // Silently ignore if the installed agy version doesn't expose session/list
+        }
+    }
+
+    /// Selects a previously saved or discovered `agy acp` chat to continue.
+    public func selectSession(_ session: SavedChatSession) {
+        activeSessionId = session.id
+        activeSessionTitle = session.title
+        activeSessionCwd = session.cwd
+        needsResumeBeforePrompt = true
+        streamedText = session.transcriptPreview
+        toolActivities = []
+        pendingPermission = nil
+        lastError = nil
+    }
+
     /// Starts a fresh conversation on the next prompt turn.
     public func resetSession() {
         activeSessionId = nil
+        activeSessionTitle = nil
         activeSessionCwd = nil
+        needsResumeBeforePrompt = false
         streamedText = ""
         toolActivities = []
         pendingPermission = nil
@@ -171,6 +214,19 @@ public final class ACPProcessClient: ObservableObject {
         do {
             try await ensureStarted()
 
+            if let existingId = activeSessionId, needsResumeBeforePrompt {
+                needsResumeBeforePrompt = false
+                let resumeId = allocateRpcId()
+                let resumePayload = try ACPCodec.encodeSessionResume(id: resumeId, sessionId: existingId, cwd: cwd)
+                do {
+                    _ = try await sendRequest(id: resumeId, data: resumePayload)
+                    activeSessionCwd = cwd
+                } catch {
+                    // Fall back to starting a fresh session if the old session can no longer be resumed
+                    activeSessionId = nil
+                }
+            }
+
             if activeSessionId == nil || activeSessionCwd != cwd {
                 let newId = allocateRpcId()
                 let newPayload = try ACPCodec.encodeSessionNew(id: newId, cwd: cwd)
@@ -184,6 +240,7 @@ public final class ACPProcessClient: ObservableObject {
                 }
                 activeSessionId = sessionId
                 activeSessionCwd = cwd
+                activeSessionTitle = String(text.prefix(44))
             }
 
             guard let sessionId = activeSessionId else { return }
@@ -199,6 +256,8 @@ public final class ACPProcessClient: ObservableObject {
             _ = try await sendRequest(id: promptId, data: promptPayload)
             isStreaming = false
             pendingPermission = nil
+
+            recordSavedSession(id: sessionId, fallbackTitle: text, cwd: cwd)
         } catch {
             isStreaming = false
             pendingPermission = nil
@@ -207,6 +266,22 @@ public final class ACPProcessClient: ObservableObject {
                 ? error.localizedDescription
                 : "\(error.localizedDescription) (\(stderrContext))"
         }
+    }
+
+    private func recordSavedSession(id: String, fallbackTitle: String, cwd: String) {
+        let title = activeSessionTitle ?? String(fallbackTitle.prefix(44))
+        activeSessionTitle = title
+        let preview = String(streamedText.suffix(4000))
+        let updated = SavedChatSession(
+            id: id,
+            title: title,
+            cwd: cwd,
+            updatedAt: Date(),
+            transcriptPreview: preview
+        )
+        savedSessions.removeAll { $0.id == id }
+        savedSessions.insert(updated, at: 0)
+        SavedChatSession.saveAll(savedSessions)
     }
 
     /// Responds to an active `session/request_permission` prompt from `agy acp`.

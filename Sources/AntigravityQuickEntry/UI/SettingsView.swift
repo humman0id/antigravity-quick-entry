@@ -20,7 +20,7 @@ public struct SettingsView: View {
                 .tabItem { Label("Files & Cleanup", systemImage: "folder.badge.gearshape") }
         }
         .padding(16)
-        .frame(width: 500, height: 370)
+        .frame(width: 520, height: 460)
     }
 
     private var generalTab: some View {
@@ -83,13 +83,31 @@ public struct SettingsView: View {
                 }
             }
 
-            Section("Antigravity CLI (agy)") {
+            Section("Delivery Target") {
+                Picker("Send prompts to", selection: $state.settings.deliveryTarget) {
+                    ForEach(DeliveryTarget.allCases, id: \.self) { target in
+                        Text(target.shortLabel).tag(target)
+                    }
+                }
+                .onChange(of: state.settings.deliveryTarget) { _, _ in
+                    state.applySettings()
+                }
+
+                if state.settings.deliveryTarget.isDesktopHandoff {
+                    Toggle("Auto-press Enter after pasting into Desktop App", isOn: $state.settings.autoSubmitDesktopHandoff)
+                        .onChange(of: state.settings.autoSubmitDesktopHandoff) { _, _ in
+                            state.applySettings()
+                        }
+                }
+            }
+
+            Section("Antigravity CLI (Optional — only for Inline HUD mode)") {
                 TextField("Auto-detect (leave blank) or custom /path/to/agy", text: $state.settings.customAgyPath)
                     .font(.system(size: 12, design: .monospaced))
                     .onSubmit { state.applySettings() }
 
                 HStack {
-                    let resolved = state.acpClient.resolveAgyExecutable() ?? "Not found in PATH or ~/.local/bin/agy"
+                    let resolved = state.acpClient.resolveAgyExecutable() ?? "Not installed (Desktop App mode works without it)"
                     Text("Resolved: \(resolved)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)

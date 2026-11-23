@@ -20,7 +20,8 @@ Default location: `~/Projects/antigravity-quick-entry/`
 | `Sources/AntigravityQuickEntry/AppState.swift` | Central `@MainActor` coordinator between hotkey, capture overlay, HUD, and `agy acp` |
 | `Sources/AntigravityQuickEntry/Hotkey/EventTapMonitor.swift` | Passive `CGEventTap` listener for `⌥ ⌥` and optional `⌥ Space` |
 | `Sources/AntigravityQuickEntry/Capture/CaptureOverlayController.swift` | Multi-display `ScreenCaptureKit` window highlight + drag-region capture overlay |
-| `Sources/AntigravityQuickEntry/ACP/ACPProcessClient.swift` | Subprocess manager for `agy acp` over stdio pipes |
+| `Sources/AntigravityQuickEntry/Desktop/DesktopAppHandoff.swift` | Direct Antigravity Desktop App handoff (clipboard + `⌘V`/`⌘N`/`↵`, no `agy` CLI required) |
+| `Sources/AntigravityQuickEntry/ACP/ACPProcessClient.swift` | Subprocess manager for `agy acp` over stdio pipes + chat session list/resume |
 | `Sources/AntigravityQuickEntry/UI/QuickEntryPanel.swift` | Floating non-activating `NSPanel` (`.canJoinAllSpaces`, `.fullScreenAuxiliary`) |
 | `Sources/AntigravityQuickEntry/UI/ComposerView.swift` | SwiftUI floating composer pill + expandable streaming response HUD + permission cards |
 | `Sources/AntigravityQuickEntry/UI/SettingsView.swift` | Preferences, macOS permission status, and live "Files & Cleanup" inspector |

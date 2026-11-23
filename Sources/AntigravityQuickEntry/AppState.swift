@@ -13,9 +13,12 @@ public final class AppState: ObservableObject {
     @Published public var isPanelVisible: Bool = false
     @Published public var isCaptureOverlayActive: Bool = false
     @Published public var captureError: String?
+    @Published public var handoffError: String?
     @Published public var accessibilityGranted: Bool = false
     @Published public var screenRecordingGranted: Bool = false
     @Published public var lastSubmittedPrompt: String = ""
+    @Published public var openDesktopWindows: [DetectedDesktopWindow] = []
+    @Published public var selectedDesktopWindowPID: pid_t?
 
     public let acpClient = ACPProcessClient()
     public let captureController = CaptureOverlayController()
@@ -42,6 +45,7 @@ public final class AppState: ObservableObject {
         configureCallbacks()
         refreshPermissions()
         applySettings()
+        refreshOpenDesktopWindows()
     }
 
     private func configureCallbacks() {
@@ -75,6 +79,14 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public func refreshOpenDesktopWindows() {
+        openDesktopWindows = DesktopAppHandoff.listOpenDesktopWindows()
+        if let pid = selectedDesktopWindowPID,
+           !openDesktopWindows.contains(where: { $0.pid == pid }) {
+            selectedDesktopWindowPID = nil
+        }
+    }
+
     public func applySettings() {
         hotkeyMonitor.updateSettings(settings)
         acpClient.updateCustomBinaryPath(settings.customAgyPath)
@@ -91,7 +103,9 @@ public final class AppState: ObservableObject {
 
     public func summonQuickEntry(withCaptureOverlay: Bool) {
         refreshPermissions()
+        refreshOpenDesktopWindows()
         captureError = nil
+        handoffError = nil
         isPanelVisible = true
         onShowPanel?()
         onResizePanel?(isHUDExpanded)
@@ -129,6 +143,26 @@ public final class AppState: ObservableObject {
         onHidePanel?()
     }
 
+    public func selectDeliveryTarget(_ target: DeliveryTarget, desktopPID: pid_t? = nil) {
+        settings.deliveryTarget = target
+        selectedDesktopWindowPID = desktopPID
+        handoffError = nil
+        if target.isDesktopHandoff {
+            isHUDExpanded = false
+            onResizePanel?(false)
+        }
+        applySettings()
+    }
+
+    public func selectSavedACPChat(_ session: SavedChatSession) {
+        settings.deliveryTarget = .inlineACP
+        settings.recordWorkspace(session.cwd)
+        applySettings()
+        acpClient.selectSession(session)
+        isHUDExpanded = !session.transcriptPreview.isEmpty
+        onResizePanel?(isHUDExpanded)
+    }
+
     public func submitPrompt() {
         let trimmed = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || attachedCapture != nil else { return }
@@ -138,6 +172,40 @@ public final class AppState: ObservableObject {
             captureController.dismiss()
         }
 
+        handoffError = nil
+
+        if settings.deliveryTarget.isDesktopHandoff {
+            let textToSend = trimmed
+            let captureToSend = attachedCapture
+            let startNew = (settings.deliveryTarget == .desktopNewChat)
+            let autoSubmit = settings.autoSubmitDesktopHandoff
+            let targetPID = selectedDesktopWindowPID
+
+            // Clear and hide Quick Entry so Antigravity Desktop App receives clean focus
+            promptText = ""
+            attachedCapture = nil
+            isPanelVisible = false
+            onHidePanel?()
+
+            Task {
+                if let err = await DesktopAppHandoff.handoff(
+                    promptText: textToSend,
+                    attachment: captureToSend,
+                    preferredPID: targetPID,
+                    startNewChat: startNew,
+                    autoSubmit: autoSubmit
+                ) {
+                    self.handoffError = err
+                    self.promptText = textToSend
+                    self.attachedCapture = captureToSend
+                    self.isPanelVisible = true
+                    self.onShowPanel?()
+                }
+            }
+            return
+        }
+
+        // Inline HUD mode via `agy acp`
         let effectivePrompt = trimmed.isEmpty ? "Describe what is shown in this screenshot and highlight any issues." : trimmed
         let pngData = attachedCapture?.pngData
         let cwd = settings.selectedWorkspace

@@ -205,6 +205,43 @@ public enum ACPCodec {
         return try encodeLine(payload)
     }
 
+    public static func encodeSessionList(id: Int) throws -> Data {
+        let payload: [String: JSONValue] = [
+            "jsonrpc": .string("2.0"),
+            "id": .int(id),
+            "method": .string("session/list"),
+            "params": .object([:])
+        ]
+        return try encodeLine(payload)
+    }
+
+    public static func encodeSessionResume(id: Int, sessionId: String, cwd: String) throws -> Data {
+        let payload: [String: JSONValue] = [
+            "jsonrpc": .string("2.0"),
+            "id": .int(id),
+            "method": .string("session/resume"),
+            "params": .object([
+                "sessionId": .string(sessionId),
+                "cwd": .string(cwd),
+                "mcpServers": .array([])
+            ])
+        ]
+        return try encodeLine(payload)
+    }
+
+    public static func parseSessionListResult(_ result: JSONValue?) -> [SavedChatSession] {
+        let rawList = result?["sessions"]?.arrayValue ?? result?.arrayValue ?? []
+        var parsed: [SavedChatSession] = []
+        for item in rawList {
+            guard let sid = item["sessionId"]?.stringValue ?? item["id"]?.stringValue else { continue }
+            let title = item["title"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cwd = item["cwd"]?.stringValue ?? AppPaths.homeDirectory.path
+            let displayTitle = (title?.isEmpty == false) ? title! : "Chat \(sid.prefix(8))"
+            parsed.append(SavedChatSession(id: sid, title: displayTitle, cwd: cwd))
+        }
+        return parsed
+    }
+
     public static func encodeSessionPrompt(
         id: Int,
         sessionId: String,

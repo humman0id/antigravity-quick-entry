@@ -244,7 +244,20 @@ public struct ComposerView: View {
                 }
             }
 
-            // Top utility row: attachment chip + capture button + workspace cwd picker
+            if let handoffError = state.handoffError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .font(.system(size: 11))
+                    Text(handoffError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                    Spacer()
+                }
+            }
+
+            // Top utility row: attachment chip + capture button + Chat/Target picker + workspace picker (when inline ACP)
             HStack(spacing: 8) {
                 if let capture = state.attachedCapture {
                     HStack(spacing: 6) {
@@ -257,7 +270,7 @@ public struct ComposerView: View {
                         Text(capture.metadata.label)
                             .font(.system(size: 11, weight: .medium))
                             .lineLimit(1)
-                            .frame(maxWidth: 190, alignment: .leading)
+                            .frame(maxWidth: 150, alignment: .leading)
 
                         Button {
                             state.attachedCapture = nil
@@ -285,30 +298,35 @@ public struct ComposerView: View {
 
                 Spacer()
 
-                // Workspace folder menu
-                Menu {
-                    Button("Choose Folder…") {
-                        state.chooseWorkspaceFolder()
-                    }
-                    Divider()
-                    ForEach(workspaceOptions, id: \.self) { path in
-                        Button(abbreviate(path)) {
-                            state.settings.recordWorkspace(path)
-                            state.applySettings()
+                // Chat & Target Picker (Desktop App Current/New Chat vs Inline HUD chats)
+                chatTargetMenu
+
+                // Workspace folder menu (only needed in Inline `agy acp` HUD mode)
+                if state.settings.deliveryTarget == .inlineACP {
+                    Menu {
+                        Button("Choose Folder…") {
+                            state.chooseWorkspaceFolder()
                         }
+                        Divider()
+                        ForEach(workspaceOptions, id: \.self) { path in
+                            Button(abbreviate(path)) {
+                                state.settings.recordWorkspace(path)
+                                state.applySettings()
+                            }
+                        }
+                    } label: {
+                        Label(abbreviate(state.settings.selectedWorkspace), systemImage: "folder")
+                            .font(.system(size: 11, design: .monospaced))
+                            .lineLimit(1)
                     }
-                } label: {
-                    Label(abbreviate(state.settings.selectedWorkspace), systemImage: "folder")
-                        .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1)
+                    .menuStyle(.borderlessButton)
+                    .frame(maxWidth: 145, alignment: .trailing)
                 }
-                .menuStyle(.borderlessButton)
-                .frame(maxWidth: 210, alignment: .trailing)
             }
 
             // Prompt input row
             HStack(spacing: 8) {
-                TextField("Ask Antigravity about your screen…", text: $state.promptText)
+                TextField(promptPlaceholder, text: $state.promptText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .focused($isPromptFocused)
@@ -333,6 +351,120 @@ public struct ComposerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .padding(12)
+    }
+
+    private var chatTargetMenu: some View {
+        Menu {
+            Section("Antigravity Desktop App (No CLI needed)") {
+                Button {
+                    state.selectDeliveryTarget(.desktopCurrentChat)
+                } label: {
+                    Label(
+                        "Current Chat in Desktop App",
+                        systemImage: state.settings.deliveryTarget == .desktopCurrentChat && state.selectedDesktopWindowPID == nil ? "checkmark" : "macwindow"
+                    )
+                }
+
+                Button {
+                    state.selectDeliveryTarget(.desktopNewChat)
+                } label: {
+                    Label(
+                        "New Chat in Desktop App (⌘N)",
+                        systemImage: state.settings.deliveryTarget == .desktopNewChat && state.selectedDesktopWindowPID == nil ? "checkmark" : "square.and.pencil"
+                    )
+                }
+
+                if state.openDesktopWindows.count > 1 {
+                    Menu("Choose Open Window") {
+                        ForEach(state.openDesktopWindows) { win in
+                            Button(win.displayLabel) {
+                                state.selectDeliveryTarget(.desktopCurrentChat, desktopPID: win.pid)
+                            }
+                        }
+                    }
+                }
+
+                Toggle("Auto-press Enter after paste", isOn: Binding(
+                    get: { state.settings.autoSubmitDesktopHandoff },
+                    set: { state.settings.autoSubmitDesktopHandoff = $0; state.applySettings() }
+                ))
+            }
+
+            Divider()
+
+            Section("Inline HUD (Requires agy CLI)") {
+                Button {
+                    state.selectDeliveryTarget(.inlineACP)
+                    state.startNewChat()
+                } label: {
+                    Label("New Inline HUD Chat", systemImage: "sparkles")
+                }
+
+                if !state.acpClient.savedSessions.isEmpty {
+                    ForEach(state.acpClient.savedSessions.prefix(8)) { session in
+                        Button {
+                            state.selectSavedACPChat(session)
+                        } label: {
+                            let isCurrent = state.settings.deliveryTarget == .inlineACP
+                                && state.acpClient.activeSessionId == session.id
+                            Label(
+                                session.title,
+                                systemImage: isCurrent ? "checkmark.bubble" : "bubble.left"
+                            )
+                        }
+                    }
+                }
+
+                Button("Refresh Chats from agy CLI") {
+                    Task {
+                        await state.acpClient.refreshRemoteSessions()
+                    }
+                }
+            }
+        } label: {
+            Label(activeTargetLabel, systemImage: activeTargetIcon)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .frame(maxWidth: 210, alignment: .trailing)
+    }
+
+    private var activeTargetLabel: String {
+        switch state.settings.deliveryTarget {
+        case .desktopCurrentChat:
+            if let pid = state.selectedDesktopWindowPID,
+               let win = state.openDesktopWindows.first(where: { $0.pid == pid }) {
+                return win.displayLabel
+            }
+            return "Desktop · Current Chat"
+        case .desktopNewChat:
+            return "Desktop · New Chat"
+        case .inlineACP:
+            if let title = state.acpClient.activeSessionTitle, !title.isEmpty {
+                return "HUD · \(title)"
+            }
+            return "Inline HUD · New Chat"
+        }
+    }
+
+    private var activeTargetIcon: String {
+        switch state.settings.deliveryTarget {
+        case .desktopCurrentChat: return "macwindow"
+        case .desktopNewChat: return "square.and.pencil"
+        case .inlineACP: return "sparkles"
+        }
+    }
+
+    private var promptPlaceholder: String {
+        switch state.settings.deliveryTarget {
+        case .desktopCurrentChat:
+            return "Send to active Antigravity Desktop chat…"
+        case .desktopNewChat:
+            return "Start a new Antigravity Desktop chat…"
+        case .inlineACP:
+            return "Ask Antigravity in floating HUD…"
+        }
     }
 
     private var workspaceOptions: [String] {
