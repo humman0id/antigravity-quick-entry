@@ -286,9 +286,7 @@ public final class ACPProcessClient: ObservableObject {
                     let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { continue }
                     if let event = try? ACPCodec.decodeLine(trimmed) {
-                        await MainActor.run {
-                            self?.handleIncomingEvent(event)
-                        }
+                        await self?.handleIncomingEvent(event)
                     }
                 }
             } catch {
@@ -301,17 +299,18 @@ public final class ACPProcessClient: ObservableObject {
                 for try await line in stderr.bytes.lines {
                     let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { continue }
-                    await MainActor.run {
-                        guard let self else { return }
-                        self.stderrLines.append(trimmed)
-                        if self.stderrLines.count > 20 {
-                            self.stderrLines.removeFirst()
-                        }
-                    }
+                    await self?.appendStderrLine(trimmed)
                 }
             } catch {
                 // Ignore EOF
             }
+        }
+    }
+
+    private func appendStderrLine(_ line: String) {
+        stderrLines.append(line)
+        if stderrLines.count > 20 {
+            stderrLines.removeFirst()
         }
     }
 
