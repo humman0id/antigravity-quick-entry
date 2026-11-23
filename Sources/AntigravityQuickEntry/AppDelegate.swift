@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import QuickEntryCore
 import SwiftUI
 
@@ -28,6 +29,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         }
         appState.onHidePanel = { [weak self] in
             self?.quickEntryPanel.orderOut(nil)
+            CATransaction.flush()
         }
         appState.onActivationStateChanged = { [weak self] active in
             self?.updateStatusItemAppearance(active: active)

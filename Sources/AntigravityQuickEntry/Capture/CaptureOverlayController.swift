@@ -56,7 +56,7 @@ public final class CaptureOverlayController {
     }
 
     /// Shows drag-to-capture overlays on every connected display.
-    public func beginCapture(maxLongEdgePx: Int = 2560) {
+    public func beginCapture(maxLongEdgePx: Int = 2560, showHintPill: Bool = true) {
         self.maxLongEdgePx = maxLongEdgePx
         captureTask?.cancel()
         captureTask = nil
@@ -69,7 +69,7 @@ public final class CaptureOverlayController {
             return
         }
 
-        presentOverlayPanels()
+        presentOverlayPanels(showHintPill: showHintPill)
     }
 
     public func dismiss() {
@@ -84,10 +84,11 @@ public final class CaptureOverlayController {
         NSCursor.arrow.set()
     }
 
-    private func presentOverlayPanels() {
+    private func presentOverlayPanels(showHintPill: Bool) {
         for screen in NSScreen.screens {
             let panel = CaptureOverlayWindow(
                 screen: screen,
+                showHintPill: showHintPill,
                 onDragStateChanged: { [weak self] dragging in
                     self?.isDragging = dragging
                 },
@@ -264,6 +265,7 @@ public final class CaptureOverlayController {
 private final class CaptureOverlayWindow: NSPanel {
     init(
         screen: NSScreen,
+        showHintPill: Bool,
         onDragStateChanged: @escaping (Bool) -> Void,
         onSelectRegion: @escaping (CGRect, NSScreen) -> Void,
         onClickOutside: @escaping () -> Void,
@@ -287,6 +289,7 @@ private final class CaptureOverlayWindow: NSPanel {
         let view = CaptureOverlayCanvasView(
             frame: NSRect(origin: .zero, size: screen.frame.size),
             screen: screen,
+            showHintPill: showHintPill,
             onDragStateChanged: onDragStateChanged,
             onSelectRegion: onSelectRegion,
             onClickOutside: onClickOutside,
@@ -301,6 +304,7 @@ private final class CaptureOverlayWindow: NSPanel {
 
 private final class CaptureOverlayCanvasView: NSView {
     private let screen: NSScreen
+    private let showHintPill: Bool
     private let onDragStateChanged: (Bool) -> Void
     private let onSelectRegion: (CGRect, NSScreen) -> Void
     private let onClickOutside: () -> Void
@@ -313,12 +317,14 @@ private final class CaptureOverlayCanvasView: NSView {
     init(
         frame: NSRect,
         screen: NSScreen,
+        showHintPill: Bool,
         onDragStateChanged: @escaping (Bool) -> Void,
         onSelectRegion: @escaping (CGRect, NSScreen) -> Void,
         onClickOutside: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.screen = screen
+        self.showHintPill = showHintPill
         self.onDragStateChanged = onDragStateChanged
         self.onSelectRegion = onSelectRegion
         self.onClickOutside = onClickOutside
@@ -423,7 +429,9 @@ private final class CaptureOverlayCanvasView: NSView {
             }
         }
 
-        drawCenteredTopPill(text: "Drag to capture a region · Esc or right-click to cancel")
+        if showHintPill {
+            drawCenteredTopPill(text: "Drag to capture a region · Esc or right-click to cancel")
+        }
     }
 
     private var topSafeInset: CGFloat {

@@ -58,12 +58,24 @@ public final class AppState: ObservableObject {
         }
 
         captureController.onCaptureCompleted = { [weak self] attachment in
-            guard let self else { return }
-            self.isCaptureOverlayActive = false
+            guard let self, self.isPanelVisible else { return }
             self.captureError = nil
             self.attachedCapture = attachment
             self.lastPanelShownUptime = ProcessInfo.processInfo.systemUptime
             self.onShowPanel?()
+
+            // Keep the transparent capture overlay silently armed after capturing so
+            // dragging again immediately retakes the screenshot without exiting Quick Entry,
+            // while a single click outside (without dragging) still dismisses Quick Entry.
+            if self.screenRecordingGranted {
+                self.isCaptureOverlayActive = true
+                self.captureController.beginCapture(
+                    maxLongEdgePx: self.settings.maxImageLongEdgePx,
+                    showHintPill: false
+                )
+            } else {
+                self.isCaptureOverlayActive = false
+            }
         }
 
         captureController.onCaptureCancelled = { [weak self] in
