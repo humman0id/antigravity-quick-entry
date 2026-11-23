@@ -19,6 +19,8 @@ public final class AppState: ObservableObject {
     @Published public var lastSubmittedPrompt: String = ""
     @Published public var openDesktopWindows: [DetectedDesktopWindow] = []
     @Published public var selectedDesktopWindowPID: pid_t?
+    @Published public private(set) var isAntigravityRunning: Bool = false
+    @Published public var launchAtLoginEnabled: Bool = false
 
     public let acpClient = ACPProcessClient()
     public let captureController = CaptureOverlayController()
@@ -27,11 +29,19 @@ public final class AppState: ObservableObject {
     public var onShowPanel: (() -> Void)?
     public var onHidePanel: (() -> Void)?
     public var onResizePanel: ((Bool) -> Void)?
+    public var onActivationStateChanged: ((Bool) -> Void)?
 
     private var cancellables = Set<AnyCancellable>()
+    private var workspaceObservers: [NSObjectProtocol] = []
+
+    /// Whether the global shortcut (`⌥ ⌥`) should currently be armed.
+    public var isQuickEntryActive: Bool {
+        !settings.onlyActiveWhenAntigravityRunning || isAntigravityRunning
+    }
 
     public init() {
         self.settings = AppSettings.load()
+        self.launchAtLoginEnabled = LaunchAgentManager.isInstalled
         try? AppPaths.ensureDirectoriesExist()
 
         // Forward ACPClient updates to SwiftUI views observing AppState
@@ -43,9 +53,9 @@ public final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         configureCallbacks()
+        observeWorkspaceLifecycle()
         refreshPermissions()
         applySettings()
-        refreshOpenDesktopWindows()
     }
 
     private func configureCallbacks() {
@@ -71,12 +81,33 @@ public final class AppState: ObservableObject {
         }
     }
 
+    private func observeWorkspaceLifecycle() {
+        let nc = NSWorkspace.shared.notificationCenter
+        let onLaunch = nc.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncActivationState()
+            }
+        }
+        let onTerminate = nc.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncActivationState()
+            }
+        }
+        workspaceObservers = [onLaunch, onTerminate]
+    }
+
     public func refreshPermissions() {
         accessibilityGranted = EventTapMonitor.isAccessibilityGranted(prompt: false)
         screenRecordingGranted = CaptureOverlayController.isScreenRecordingGranted()
-        if accessibilityGranted {
-            _ = hotkeyMonitor.start()
-        }
+        syncActivationState()
     }
 
     public func refreshOpenDesktopWindows() {
@@ -87,10 +118,41 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Arms the global hotkey only when Antigravity is running (unless the user disables that gating).
+    public func syncActivationState() {
+        isAntigravityRunning = !DesktopAppHandoff.findRunningAntigravityApps().isEmpty
+        refreshOpenDesktopWindows()
+
+        let active = isQuickEntryActive
+        if active && accessibilityGranted {
+            _ = hotkeyMonitor.start()
+        } else {
+            hotkeyMonitor.stop()
+            if !active && isPanelVisible {
+                dismissQuickEntry()
+            }
+        }
+        onActivationStateChanged?(active)
+    }
+
+    public func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try LaunchAgentManager.install()
+            } else {
+                try LaunchAgentManager.uninstall()
+            }
+            launchAtLoginEnabled = LaunchAgentManager.isInstalled
+        } catch {
+            launchAtLoginEnabled = LaunchAgentManager.isInstalled
+        }
+    }
+
     public func applySettings() {
         hotkeyMonitor.updateSettings(settings)
         acpClient.updateCustomBinaryPath(settings.customAgyPath)
         try? settings.save()
+        syncActivationState()
     }
 
     public func toggleQuickEntry() {
@@ -241,6 +303,10 @@ public final class AppState: ObservableObject {
     }
 
     public func shutdown() {
+        for observer in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
         captureController.dismiss()
         hotkeyMonitor.stop()
         acpClient.stop()

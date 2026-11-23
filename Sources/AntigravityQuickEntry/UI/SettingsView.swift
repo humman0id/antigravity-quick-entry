@@ -20,11 +20,29 @@ public struct SettingsView: View {
                 .tabItem { Label("Files & Cleanup", systemImage: "folder.badge.gearshape") }
         }
         .padding(16)
-        .frame(width: 520, height: 460)
+        .frame(width: 530, height: 530)
     }
 
     private var generalTab: some View {
         Form {
+            Section("Activation & Auto-Start") {
+                Toggle("Only active while Antigravity is running", isOn: $state.settings.onlyActiveWhenAntigravityRunning)
+                    .onChange(of: state.settings.onlyActiveWhenAntigravityRunning) { _, _ in
+                        state.applySettings()
+                    }
+
+                Toggle("Start quietly at login (LaunchAgent)", isOn: Binding(
+                    get: { state.launchAtLoginEnabled },
+                    set: { state.setLaunchAtLogin($0) }
+                ))
+
+                Text(state.isAntigravityRunning
+                     ? "Antigravity is currently running — Quick Entry is active."
+                     : "Antigravity is not running — hotkey sleeps automatically until you open Antigravity.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Quick Entry Shortcut") {
                 Picker("Trigger", selection: $state.settings.shortcutMode) {
                     ForEach(TriggerShortcutMode.allCases, id: \.self) { mode in

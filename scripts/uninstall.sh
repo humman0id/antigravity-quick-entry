@@ -27,8 +27,11 @@ for arg in "$@"; do
   esac
 done
 
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${BUNDLE_ID}.plist"
+
 PATHS=(
   "/Applications/${APP_NAME}.app"
+  "${LAUNCH_AGENT}"
   "${HOME}/Library/Application Support/${APP_NAME}"
   "${HOME}/Library/Caches/${APP_NAME}"
   "${HOME}/Library/Preferences/${BUNDLE_ID}.plist"
@@ -53,6 +56,11 @@ if [[ "$CONFIRM" != "true" ]]; then
   echo "No files were deleted. Re-run with --confirm to remove the existing paths above."
   echo "Your source code repository ($(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)) is NEVER deleted by this script."
   exit 0
+fi
+
+if [[ -e "$LAUNCH_AGENT" && "$(uname -s)" == "Darwin" ]]; then
+  echo "==> Unloading LaunchAgent..."
+  launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
 fi
 
 echo "==> Stopping any running ${APP_NAME} process..."

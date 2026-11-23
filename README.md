@@ -1,58 +1,50 @@
 # Antigravity Quick Entry (macOS MVP)
 
-A lightweight native macOS menu-bar app that brings Claude Desktop's **Quick Entry** workflow (`⌥ ⌥` + instant drag/window screenshot capture + floating prompt HUD) to **Google Antigravity** via its official Agent Client Protocol server (`agy acp`).
+A lightweight native macOS menu-bar app that brings Claude Desktop's **Quick Entry** workflow (`⌥ ⌥` + instant drag-region screenshot capture + floating prompt bar) to **Google Antigravity Desktop App** — with optional `agy acp` inline HUD support.
+
+## Highlights
+
+- **Automatically active while Antigravity is running:** Watches macOS app launch/quit events so `⌥ ⌥` arms itself when Antigravity Desktop App opens and sleeps automatically when you quit Antigravity.
+- **No `agy` CLI required:** Sends your screenshot and prompt directly into Antigravity Desktop App (**Current Chat**, **New Chat `⌘N`**, or a chosen open window). Optional **Inline HUD (`agy acp`)** mode is also built in if you install the CLI later.
+- **Clean drag-region capture:** No full-screen blue window tint — just a crisp crosshair and drag-box selection across any Space or full-screen app.
 
 ## Prerequisites (on your Mac)
 
-- **macOS 14.0+** (Sonoma or newer, for `SCScreenshotManager`)
-- **Xcode Command Line Tools** (`xcode-select --install`, Swift 5.9+)
-- **Google Antigravity CLI (`agy` v1.5.5+)** installed and signed in (`agy`)
+- **macOS 14.0+** (Sonoma or newer)
+- **Xcode Command Line Tools** (`xcode-select --install`)
+- **Google Antigravity Desktop App** (no CLI needed for default mode)
 
-## Quick Start on macOS
+## Fresh Setup on macOS
 
-### 1. Run Unit Tests
+### 1. Build & Install (with Optional Login Auto-Start)
 ```bash
 cd ~/Projects/antigravity-quick-entry
-swift test
-node --test plugin/mcp-server/test.mjs
-```
 
-### 2. Build & Launch the Menu-Bar App
-```bash
-./scripts/bundle-app.sh
-open dist/AntigravityQuickEntry.app
-```
-Or install directly into `/Applications`:
-```bash
-./scripts/bundle-app.sh --install
+# Recommended: installs into /Applications AND starts quietly at login
+# so it wakes up automatically whenever Antigravity is open:
+./scripts/bundle-app.sh --install --autostart
 open /Applications/AntigravityQuickEntry.app
 ```
+*(Or build locally without installing to `/Applications`: `./scripts/bundle-app.sh && open dist/AntigravityQuickEntry.app`)*
 
-### 3. Grant macOS Permissions
-Click the **`✦`** icon in your macOS menu bar (or open **Settings & Files…**):
-1. **Accessibility** — required for passive `CGEventTap` global `⌥ ⌥` detection.
-2. **Screen Recording** — required for `ScreenCaptureKit` region/window capture.
+### 2. Grant macOS Permissions
+Click the **`✦`** icon in your macOS menu bar → **Settings & Files…**:
+1. **Accessibility** — required for passive `CGEventTap` global `⌥ ⌥` detection and Desktop App handoff.
+2. **Screen Recording** — required for `ScreenCaptureKit` drag-region capture.
 
-### 4. Use It
+### 3. Use It
+- Make sure **Antigravity Desktop App** is running (`✦` turns bright when active, dims when sleeping).
 - **Double-tap `Option` (`⌥ ⌥`)** from any app or full-screen Space.
-- **Click any window** or **drag a rectangle** to attach a screenshot (or start typing immediately to skip capture).
-- Pick your project workspace (`cwd`) and hit **Enter** — Antigravity streams its reply right inside the floating HUD and asks for approval inline before editing files or running commands.
-- Press **`Esc`** anytime to cancel/dismiss.
-
-## Optional: Companion Antigravity Plugin (`get_latest_screenshot`)
-
-If you also want existing Antigravity Desktop App / IDE / CLI chats to pull your latest Quick Entry screenshot on demand:
-```bash
-agy plugin install ~/Projects/antigravity-quick-entry/plugin
-```
+- **Drag a rectangle** to attach a screenshot (or start typing immediately to skip capture).
+- Use the target picker to send to **Desktop · Current Chat** or **Desktop · New Chat (`⌘N`)**, then press **Enter**.
+- Press **`Esc`** (or right-click during drag) anytime to cancel/dismiss.
 
 ## Tracking & Full Clean-Up
 
 Every single file in this repo and every path touched on macOS is documented in [`FILES_MANIFEST.md`](./FILES_MANIFEST.md).
 
-To preview and cleanly remove all runtime files at any time:
+To preview and cleanly wipe all runtime files, LaunchAgent, and macOS TCC permissions:
 ```bash
-./scripts/uninstall.sh                # dry-run preview
-./scripts/uninstall.sh --confirm      # removes app, settings, cache, optional plugin
-./scripts/uninstall.sh --confirm --reset-permissions
+./scripts/uninstall.sh                                # dry-run preview
+./scripts/uninstall.sh --confirm --reset-permissions  # full clean uninstall
 ```

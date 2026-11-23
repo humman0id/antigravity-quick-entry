@@ -58,6 +58,15 @@ public enum AppPaths {
             .appendingPathComponent("quick-capture", isDirectory: true)
     }
 
+    /// Optional macOS LaunchAgent plist so Quick Entry starts quietly at login
+    /// and automatically wakes up whenever Antigravity Desktop App is running.
+    public static var launchAgentPlistURL: URL {
+        homeDirectory
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(bundleIdentifier).plist")
+    }
+
     /// Candidate locations for the official Google Antigravity CLI (`agy`).
     public static var defaultAgyCandidatePaths: [String] {
         [
@@ -88,6 +97,7 @@ public enum AppPaths {
     public static var trackedPathsSummary: [TrackedPathItem] {
         [
             TrackedPathItem(label: "App Bundle", path: installedAppURL.path, purpose: "Compiled macOS menu-bar app"),
+            TrackedPathItem(label: "Login Auto-Start Agent", path: launchAgentPlistURL.path, purpose: "Optional LaunchAgent plist (starts quietly at login)"),
             TrackedPathItem(label: "Settings & Chats", path: appSupportDirectory.path, purpose: "settings.json, sessions.json, and recent workspaces"),
             TrackedPathItem(label: "Screenshot Cache", path: cacheDirectory.path, purpose: "latest.png and latest.json metadata"),
             TrackedPathItem(label: "Optional MCP Plugin", path: optionalPluginDirectory.path, purpose: "Companion get_latest_screenshot plugin (if installed)")
@@ -189,6 +199,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var shortcutMode: TriggerShortcutMode
     public var deliveryTarget: DeliveryTarget
     public var autoSubmitDesktopHandoff: Bool
+    public var onlyActiveWhenAntigravityRunning: Bool
     public var maxDoubleTapIntervalMs: Int
     public var maxSingleTapDurationMs: Int
     public var customAgyPath: String
@@ -200,6 +211,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         shortcutMode: TriggerShortcutMode = .doubleOption,
         deliveryTarget: DeliveryTarget = .desktopCurrentChat,
         autoSubmitDesktopHandoff: Bool = true,
+        onlyActiveWhenAntigravityRunning: Bool = true,
         maxDoubleTapIntervalMs: Int = 360,
         maxSingleTapDurationMs: Int = 260,
         customAgyPath: String = "",
@@ -210,6 +222,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.shortcutMode = shortcutMode
         self.deliveryTarget = deliveryTarget
         self.autoSubmitDesktopHandoff = autoSubmitDesktopHandoff
+        self.onlyActiveWhenAntigravityRunning = onlyActiveWhenAntigravityRunning
         self.maxDoubleTapIntervalMs = maxDoubleTapIntervalMs
         self.maxSingleTapDurationMs = maxSingleTapDurationMs
         self.customAgyPath = customAgyPath
@@ -222,6 +235,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case shortcutMode
         case deliveryTarget
         case autoSubmitDesktopHandoff
+        case onlyActiveWhenAntigravityRunning
         case maxDoubleTapIntervalMs
         case maxSingleTapDurationMs
         case customAgyPath
@@ -236,6 +250,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.shortcutMode = try c.decodeIfPresent(TriggerShortcutMode.self, forKey: .shortcutMode) ?? .doubleOption
         self.deliveryTarget = try c.decodeIfPresent(DeliveryTarget.self, forKey: .deliveryTarget) ?? .desktopCurrentChat
         self.autoSubmitDesktopHandoff = try c.decodeIfPresent(Bool.self, forKey: .autoSubmitDesktopHandoff) ?? true
+        self.onlyActiveWhenAntigravityRunning = try c.decodeIfPresent(Bool.self, forKey: .onlyActiveWhenAntigravityRunning) ?? true
         self.maxDoubleTapIntervalMs = try c.decodeIfPresent(Int.self, forKey: .maxDoubleTapIntervalMs) ?? 360
         self.maxSingleTapDurationMs = try c.decodeIfPresent(Int.self, forKey: .maxSingleTapDurationMs) ?? 260
         self.customAgyPath = try c.decodeIfPresent(String.self, forKey: .customAgyPath) ?? ""

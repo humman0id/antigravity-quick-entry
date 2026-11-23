@@ -30,13 +30,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         appState.onResizePanel = { [weak self] expanded in
             self?.quickEntryPanel.updateHeight(expanded: expanded)
         }
+        appState.onActivationStateChanged = { [weak self] active in
+            self?.updateStatusItemAppearance(active: active)
+        }
 
         setupMenuBarItem()
+        updateStatusItemAppearance(active: appState.isQuickEntryActive)
 
         if !EventTapMonitor.isAccessibilityGranted(prompt: true) {
             // Accessibility prompt shown once; user can also re-check from menu bar or Settings.
         } else {
-            _ = appState.hotkeyMonitor.start()
+            appState.syncActivationState()
         }
     }
 
@@ -56,9 +60,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         statusItem = item
     }
 
+    private func updateStatusItemAppearance(active: Bool) {
+        guard let button = statusItem?.button else { return }
+        button.appearsDisabled = !active
+        button.toolTip = active
+            ? "Antigravity Quick Entry — Active (Double-tap ⌥)"
+            : "Antigravity Quick Entry — Sleeping (Open Antigravity to activate)"
+    }
+
     public func menuWillOpen(_ menu: NSMenu) {
         appState.refreshPermissions()
         menu.removeAllItems()
+
+        let active = appState.isQuickEntryActive
+        let statusTitle: String
+        if appState.settings.onlyActiveWhenAntigravityRunning {
+            statusTitle = active
+                ? "Status: Active (Antigravity running) ✓"
+                : "Status: Sleeping (Open Antigravity to activate)"
+        } else {
+            statusTitle = "Status: Always Active ✓"
+        }
+        let statusLine = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
+        statusLine.isEnabled = false
+        menu.addItem(statusLine)
 
         let openItem = NSMenuItem(
             title: "Open Quick Entry (\(appState.settings.shortcutMode == .doubleOption ? "⌥ ⌥" : "⌥ Space"))",

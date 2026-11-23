@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Builds AntigravityQuickEntry on macOS and packages it into a menu-bar `.app` bundle.
 # Usage:
-#   ./scripts/bundle-app.sh             # builds into ./dist/AntigravityQuickEntry.app
-#   ./scripts/bundle-app.sh --install   # also copies to /Applications/AntigravityQuickEntry.app
+#   ./scripts/bundle-app.sh                       # builds into ./dist/AntigravityQuickEntry.app
+#   ./scripts/bundle-app.sh --install             # installs to /Applications/AntigravityQuickEntry.app
+#   ./scripts/bundle-app.sh --install --autostart # installs + starts quietly at login (active when Antigravity runs)
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Error: bundle-app.sh must be run on macOS (detected $(uname -s))." >&2
@@ -17,10 +18,12 @@ BUNDLE_ID="com.antigravity.quickentry"
 DIST_DIR="${REPO_ROOT}/dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
 INSTALL_TO_APPS=false
+INSTALL_AUTOSTART=false
 
 for arg in "$@"; do
   case "$arg" in
     --install) INSTALL_TO_APPS=true ;;
+    --autostart) INSTALL_AUTOSTART=true ;;
     *)
       echo "Unknown argument: $arg" >&2
       exit 1
@@ -73,7 +76,7 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Antigravity Quick Entry captures regions or windows you select so you can send visual context to Antigravity.</string>
+    <string>Antigravity Quick Entry captures regions you select so you can send visual context to Antigravity.</string>
 </dict>
 </plist>
 EOF
@@ -83,14 +86,43 @@ codesign --force --deep --sign - "$APP_BUNDLE"
 
 echo "==> Built: ${APP_BUNDLE}"
 
+FINAL_APP_PATH="${APP_BUNDLE}"
 if [[ "$INSTALL_TO_APPS" == "true" ]]; then
   TARGET="/Applications/${APP_NAME}.app"
   echo "==> Installing to ${TARGET}..."
   pkill -x "$APP_NAME" 2>/dev/null || true
   rm -rf "$TARGET"
   cp -R "$APP_BUNDLE" "$TARGET"
-  echo "==> Installed! Launch with: open \"${TARGET}\""
-else
-  echo "==> Launch directly with: open \"${APP_BUNDLE}\""
-  echo "    Or install to /Applications with: ./scripts/bundle-app.sh --install"
+  FINAL_APP_PATH="$TARGET"
+  echo "==> Installed to ${TARGET}"
 fi
+
+if [[ "$INSTALL_AUTOSTART" == "true" ]]; then
+  LAUNCH_AGENT="${HOME}/Library/LaunchAgents/${BUNDLE_ID}.plist"
+  mkdir -p "${HOME}/Library/LaunchAgents"
+  cat > "$LAUNCH_AGENT" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${BUNDLE_ID}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${FINAL_APP_PATH}/Contents/MacOS/${APP_NAME}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
+EOF
+  echo "==> Installed LaunchAgent: ${LAUNCH_AGENT}"
+  launchctl bootout "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
+fi
+
+echo "==> Launch with: open \"${FINAL_APP_PATH}\""
