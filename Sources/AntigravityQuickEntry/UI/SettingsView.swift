@@ -2,7 +2,7 @@ import AppKit
 import QuickEntryCore
 import SwiftUI
 
-/// Settings window showing shortcut options, macOS permissions, `agy` binary path,
+/// Settings window showing shortcut options, macOS permissions,
 /// and a full transparent manifest of every file path touched on disk.
 public struct SettingsView: View {
     @ObservedObject var state: AppState
@@ -20,7 +20,7 @@ public struct SettingsView: View {
                 .tabItem { Label("Files & Cleanup", systemImage: "folder.badge.gearshape") }
         }
         .padding(16)
-        .frame(width: 530, height: 530)
+        .frame(width: 530, height: 470)
     }
 
     private var generalTab: some View {
@@ -111,27 +111,10 @@ public struct SettingsView: View {
                     state.applySettings()
                 }
 
-                if state.settings.deliveryTarget.isDesktopHandoff {
-                    Toggle("Auto-press Enter after pasting into Desktop App", isOn: $state.settings.autoSubmitDesktopHandoff)
-                        .onChange(of: state.settings.autoSubmitDesktopHandoff) { _, _ in
-                            state.applySettings()
-                        }
-                }
-            }
-
-            Section("Antigravity CLI (Optional — only for Inline HUD mode)") {
-                TextField("Auto-detect (leave blank) or custom /path/to/agy", text: $state.settings.customAgyPath)
-                    .font(.system(size: 12, design: .monospaced))
-                    .onSubmit { state.applySettings() }
-
-                HStack {
-                    let resolved = state.acpClient.resolveAgyExecutable() ?? "Not installed (Desktop App mode works without it)"
-                    Text("Resolved: \(resolved)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Save") { state.applySettings() }
-                }
+                Toggle("Auto-press Enter after pasting into Desktop App", isOn: $state.settings.autoSubmitDesktopHandoff)
+                    .onChange(of: state.settings.autoSubmitDesktopHandoff) { _, _ in
+                        state.applySettings()
+                    }
             }
         }
         .formStyle(.grouped)

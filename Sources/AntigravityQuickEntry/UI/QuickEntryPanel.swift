@@ -6,17 +6,17 @@ import SwiftUI
 @MainActor
 public final class QuickEntryPanel: NSPanel {
     public var onEscapePressed: (() -> Void)?
+    public var onResignKey: (() -> Void)?
 
     private static let panelWidth: CGFloat = 640
-    private static let compactHeight: CGFloat = 132
-    private static let expandedHeight: CGFloat = 460
+    private static let panelHeight: CGFloat = 104
 
     public init(rootView: AnyView) {
         let initialRect = NSRect(
             x: 0,
             y: 0,
             width: Self.panelWidth,
-            height: Self.compactHeight
+            height: Self.panelHeight
         )
         super.init(
             contentRect: initialRect,
@@ -29,7 +29,7 @@ public final class QuickEntryPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = true
         level = .floating
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
@@ -43,7 +43,8 @@ public final class QuickEntryPanel: NSPanel {
         visualEffect.layer?.borderWidth = 1
         visualEffect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
 
-        let hosting = NSHostingView(rootView: rootView)
+        let hosting = FirstMouseHostingView(rootView: rootView)
+        hosting.sizingOptions = []
         hosting.translatesAutoresizingMaskIntoConstraints = false
         visualEffect.addSubview(hosting)
 
@@ -60,6 +61,11 @@ public final class QuickEntryPanel: NSPanel {
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { false }
 
+    public override func resignKey() {
+        super.resignKey()
+        onResignKey?()
+    }
+
     public override func cancelOperation(_ sender: Any?) {
         onEscapePressed?()
     }
@@ -73,25 +79,27 @@ public final class QuickEntryPanel: NSPanel {
     }
 
     /// Positions the floating bar bottom-center on whichever display currently holds the mouse cursor.
-    public func showBottomCenterOnActiveScreen(expanded: Bool) {
+    /// If already visible (e.g. user moved it out of the way before capturing), keeps its current position.
+    public func showOrFocus() {
+        if isVisible {
+            makeKeyAndOrderFront(nil)
+            return
+        }
         let mouseLocation = NSEvent.mouseLocation
         let targetScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main
         let visibleFrame = targetScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
-        let height = expanded ? Self.expandedHeight : Self.compactHeight
         let x = visibleFrame.midX - (Self.panelWidth / 2.0)
         let y = visibleFrame.minY + 36.0
 
-        setFrame(NSRect(x: x, y: y, width: Self.panelWidth, height: height), display: true)
+        setFrame(NSRect(x: x, y: y, width: Self.panelWidth, height: Self.panelHeight), display: true)
         makeKeyAndOrderFront(nil)
     }
+}
 
-    /// Smoothly grows/shrinks upward while keeping the bottom edge anchored.
-    public func updateHeight(expanded: Bool) {
-        let targetHeight = expanded ? Self.expandedHeight : Self.compactHeight
-        var nextFrame = frame
-        nextFrame.size.height = targetHeight
-        nextFrame.size.width = Self.panelWidth
-        setFrame(nextFrame, display: true, animate: true)
-    }
+/// Ensures SwiftUI controls inside our non-activating panel respond on the very first click
+/// without AppKit treating click-down jitter as a window drag.
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
 }

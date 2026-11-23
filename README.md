@@ -1,18 +1,18 @@
 # Antigravity Quick Entry (macOS MVP)
 
-A lightweight native macOS menu-bar app that brings Claude Desktop's **Quick Entry** workflow (`⌥ ⌥` + instant drag-region screenshot capture + floating prompt bar) to **Google Antigravity Desktop App** — with optional `agy acp` inline HUD support.
+A lightweight native macOS menu-bar app that brings Claude Desktop's **Quick Entry** workflow (`⌥ ⌥` + instant drag-region screenshot capture + floating prompt bar) to **Google Antigravity Desktop App**.
 
 ## Highlights
 
 - **Automatically active while Antigravity is running:** Watches macOS app launch/quit events so `⌥ ⌥` arms itself when Antigravity Desktop App opens and sleeps automatically when you quit Antigravity.
-- **No `agy` CLI required:** Sends your screenshot and prompt directly into Antigravity Desktop App (**Current Chat**, **New Chat `⌘N`**, or a chosen open window). Optional **Inline HUD (`agy acp`)** mode is also built in if you install the CLI later.
-- **Clean drag-region capture:** No full-screen blue window tint — just a crisp crosshair and drag-box selection across any Space or full-screen app.
+- **Direct Desktop App handoff:** Sends your screenshot and prompt directly into Antigravity Desktop App (**Current Chat**, **New Chat `⌘N`**, or a chosen open window).
+- **Clean drag-region capture:** No full-screen blue window tint and border-free PNG captures across any Space or full-screen app.
 
 ## Prerequisites (on your Mac)
 
 - **macOS 14.0+** (Sonoma or newer)
 - **Xcode Command Line Tools** (`xcode-select --install`)
-- **Google Antigravity Desktop App** (no CLI needed for default mode)
+- **Google Antigravity Desktop App**
 
 ## Fresh Setup on macOS
 

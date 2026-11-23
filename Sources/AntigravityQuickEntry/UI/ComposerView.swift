@@ -2,28 +2,35 @@ import AppKit
 import QuickEntryCore
 import SwiftUI
 
-/// Compact floating Quick Entry composer + expandable streaming Antigravity HUD.
+/// Compact floating Quick Entry composer for Antigravity Desktop App.
 public struct ComposerView: View {
     @ObservedObject var state: AppState
     @FocusState private var isPromptFocused: Bool
+    @State private var isHoveringRemoveCapture: Bool = false
 
     public init(state: AppState) {
         self.state = state
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            if state.isHUDExpanded {
-                streamingDrawer
-                Divider().opacity(0.35)
-            }
-            composerBar
-        }
-        .onChange(of: state.isPanelVisible) { _, visible in
+        composerBar
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+            .modifier(PanelDragModifier())
+            .onChange(of: state.isPanelVisible) { _, visible in
             if visible {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     isPromptFocused = true
                 }
+            }
+        }
+        .onChange(of: state.attachedCapture) { _, capture in
+            if capture != nil && state.isPanelVisible {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    isPromptFocused = true
+                }
+            } else {
+                isHoveringRemoveCapture = false
             }
         }
         .onChange(of: state.promptText) { _, newValue in
@@ -31,195 +38,6 @@ public struct ComposerView: View {
                 state.handleUserStartedTyping()
             }
         }
-    }
-
-    // MARK: - Expanded Streaming HUD Drawer
-
-    private var streamingDrawer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Top bar
-            HStack(spacing: 8) {
-                Text("✦ Antigravity")
-                    .font(.system(size: 13, weight: .semibold))
-                statusPill
-                Spacer()
-                if state.acpClient.isStreaming {
-                    Button("Stop") {
-                        state.acpClient.cancelActiveTurn()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                Button("New Chat") {
-                    state.startNewChat()
-                }
-                .buttonStyle(.borderless)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-
-                Button {
-                    state.dismissQuickEntry()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Dismiss (Esc)")
-            }
-
-            // Streamed response body
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if !state.lastSubmittedPrompt.isEmpty {
-                            HStack(spacing: 6) {
-                                if state.attachedCapture != nil {
-                                    Text("📷 PNG")
-                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.accentColor.opacity(0.18))
-                                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                                }
-                                Text(state.lastSubmittedPrompt)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                        }
-
-                        if !state.acpClient.toolActivities.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(state.acpClient.toolActivities) { tool in
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "wrench.and.screwdriver")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.secondary)
-                                        Text(tool.title)
-                                            .font(.system(size: 11, design: .monospaced))
-                                        Spacer()
-                                        Text(tool.status)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.primary.opacity(0.05))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                                }
-                            }
-                        }
-
-                        if let err = state.acpClient.lastError {
-                            Text(err)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
-
-                        if !state.acpClient.streamedText.isEmpty {
-                            Text(state.acpClient.streamedText)
-                                .font(.system(size: 13))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        } else if state.acpClient.isStreaming {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
-                                Text("Waiting for Antigravity…")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        if let perm = state.acpClient.pendingPermission {
-                            permissionCard(perm)
-                        }
-
-                        Color.clear.frame(height: 1).id("bottom-anchor")
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .onChange(of: state.acpClient.streamedText) { _, _ in
-                    proxy.scrollTo("bottom-anchor", anchor: .bottom)
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxHeight: 330)
-    }
-
-    private var statusPill: some View {
-        let text: String
-        let color: Color
-        if state.acpClient.pendingPermission != nil {
-            text = "approval needed"
-            color = .orange
-        } else if state.acpClient.isStreaming {
-            text = "streaming…"
-            color = .accentColor
-        } else if case .failed = state.acpClient.connectionState {
-            text = "error"
-            color = .red
-        } else {
-            text = "ready"
-            color = .green
-        }
-
-        return Text(text)
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.16))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
-    }
-
-    private func permissionCard(_ req: ACPPermissionRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Permission Required")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.orange)
-                Spacer()
-                Text(req.toolTitle)
-                    .font(.system(size: 11, design: .monospaced))
-            }
-
-            Text(req.rawDescription)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(4)
-                .textSelection(.enabled)
-
-            HStack(spacing: 8) {
-                ForEach(req.options) { opt in
-                    if opt.isAllow {
-                        Button(opt.name) {
-                            state.acpClient.respondToPermission(optionId: opt.id)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    } else {
-                        Button(opt.name) {
-                            state.acpClient.respondToPermission(optionId: opt.id)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .background(Color.orange.opacity(0.08))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.orange.opacity(0.45), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Compact Floating Composer Bar
@@ -257,7 +75,7 @@ public struct ComposerView: View {
                 }
             }
 
-            // Top utility row: attachment chip + capture button + Chat/Target picker + workspace picker (when inline ACP)
+            // Top utility row: attachment chip + capture button + Desktop target picker
             HStack(spacing: 8) {
                 if let capture = state.attachedCapture {
                     HStack(spacing: 6) {
@@ -276,13 +94,24 @@ public struct ComposerView: View {
                             state.attachedCapture = nil
                         } label: {
                             Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.system(size: 9, weight: .bold))
+                                .frame(width: 20, height: 20)
+                                .background(
+                                    Circle()
+                                        .fill(isHoveringRemoveCapture ? Color.primary.opacity(0.14) : Color.clear)
+                                )
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isHoveringRemoveCapture ? .primary : .secondary)
+                        .onHover { hovering in
+                            isHoveringRemoveCapture = hovering
+                        }
+                        .help("Remove screenshot")
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.leading, 8)
+                    .padding(.trailing, 3)
+                    .padding(.vertical, 3)
                     .background(Color.primary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
@@ -298,30 +127,7 @@ public struct ComposerView: View {
 
                 Spacer()
 
-                // Chat & Target Picker (Desktop App Current/New Chat vs Inline HUD chats)
                 chatTargetMenu
-
-                // Workspace folder menu (only needed in Inline `agy acp` HUD mode)
-                if state.settings.deliveryTarget == .inlineACP {
-                    Menu {
-                        Button("Choose Folder…") {
-                            state.chooseWorkspaceFolder()
-                        }
-                        Divider()
-                        ForEach(workspaceOptions, id: \.self) { path in
-                            Button(abbreviate(path)) {
-                                state.settings.recordWorkspace(path)
-                                state.applySettings()
-                            }
-                        }
-                    } label: {
-                        Label(abbreviate(state.settings.selectedWorkspace), systemImage: "folder")
-                            .font(.system(size: 11, design: .monospaced))
-                            .lineLimit(1)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .frame(maxWidth: 145, alignment: .trailing)
-                }
             }
 
             // Prompt input row
@@ -355,78 +161,70 @@ public struct ComposerView: View {
 
     private var chatTargetMenu: some View {
         Menu {
-            Section("Antigravity Desktop App (No CLI needed)") {
-                Button {
-                    state.selectDeliveryTarget(.desktopCurrentChat)
-                } label: {
-                    Label(
-                        "Current Chat in Desktop App",
-                        systemImage: state.settings.deliveryTarget == .desktopCurrentChat && state.selectedDesktopWindowPID == nil ? "checkmark" : "macwindow"
-                    )
+            Section("Antigravity Desktop") {
+                Toggle(isOn: Binding(
+                    get: {
+                        state.settings.deliveryTarget == .desktopCurrentChat
+                            && state.selectedDesktopWindowPID == nil
+                    },
+                    set: { _ in
+                        state.selectDeliveryTarget(.desktopCurrentChat)
+                    }
+                )) {
+                    Label("Current Chat", systemImage: "macwindow")
                 }
 
-                Button {
-                    state.selectDeliveryTarget(.desktopNewChat)
-                } label: {
-                    Label(
-                        "New Chat in Desktop App (⌘N)",
-                        systemImage: state.settings.deliveryTarget == .desktopNewChat && state.selectedDesktopWindowPID == nil ? "checkmark" : "square.and.pencil"
-                    )
+                Toggle(isOn: Binding(
+                    get: {
+                        state.settings.deliveryTarget == .desktopNewChat
+                            && state.selectedDesktopWindowPID == nil
+                    },
+                    set: { _ in
+                        state.selectDeliveryTarget(.desktopNewChat)
+                    }
+                )) {
+                    Label("New Chat (⌘N)", systemImage: "square.and.pencil")
                 }
 
-                if state.openDesktopWindows.count > 1 {
+                if state.openDesktopWindows.count > 1 && !state.isAntigravityFrontmost {
                     Menu("Choose Open Window") {
                         ForEach(state.openDesktopWindows) { win in
-                            Button(win.displayLabel) {
-                                state.selectDeliveryTarget(.desktopCurrentChat, desktopPID: win.pid)
+                            Toggle(isOn: Binding(
+                                get: {
+                                    state.settings.deliveryTarget == .desktopCurrentChat
+                                        && state.selectedDesktopWindowPID == win.pid
+                                },
+                                set: { _ in
+                                    state.selectDeliveryTarget(.desktopCurrentChat, desktopPID: win.pid)
+                                }
+                            )) {
+                                Text(win.displayLabel)
                             }
                         }
                     }
                 }
+
+                Divider()
 
                 Toggle("Auto-press Enter after paste", isOn: Binding(
                     get: { state.settings.autoSubmitDesktopHandoff },
                     set: { state.settings.autoSubmitDesktopHandoff = $0; state.applySettings() }
                 ))
             }
-
-            Divider()
-
-            Section("Inline HUD (Requires agy CLI)") {
-                Button {
-                    state.selectDeliveryTarget(.inlineACP)
-                    state.startNewChat()
-                } label: {
-                    Label("New Inline HUD Chat", systemImage: "sparkles")
-                }
-
-                if !state.acpClient.savedSessions.isEmpty {
-                    ForEach(state.acpClient.savedSessions.prefix(8)) { session in
-                        Button {
-                            state.selectSavedACPChat(session)
-                        } label: {
-                            let isCurrent = state.settings.deliveryTarget == .inlineACP
-                                && state.acpClient.activeSessionId == session.id
-                            Label(
-                                session.title,
-                                systemImage: isCurrent ? "checkmark.bubble" : "bubble.left"
-                            )
-                        }
-                    }
-                }
-
-                Button("Refresh Chats from agy CLI") {
-                    Task {
-                        await state.acpClient.refreshRemoteSessions()
-                    }
-                }
-            }
         } label: {
-            Label(activeTargetLabel, systemImage: activeTargetIcon)
-                .font(.system(size: 11, weight: .medium))
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Image(systemName: activeTargetIcon)
+                Text(activeTargetLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .layoutPriority(1)
+            }
+            .font(.system(size: 11, weight: .medium))
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .frame(maxWidth: 210, alignment: .trailing)
     }
 
@@ -440,11 +238,6 @@ public struct ComposerView: View {
             return "Desktop · Current Chat"
         case .desktopNewChat:
             return "Desktop · New Chat"
-        case .inlineACP:
-            if let title = state.acpClient.activeSessionTitle, !title.isEmpty {
-                return "HUD · \(title)"
-            }
-            return "Inline HUD · New Chat"
         }
     }
 
@@ -452,7 +245,6 @@ public struct ComposerView: View {
         switch state.settings.deliveryTarget {
         case .desktopCurrentChat: return "macwindow"
         case .desktopNewChat: return "square.and.pencil"
-        case .inlineACP: return "sparkles"
         }
     }
 
@@ -462,32 +254,42 @@ public struct ComposerView: View {
             return "Send to active Antigravity Desktop chat…"
         case .desktopNewChat:
             return "Start a new Antigravity Desktop chat…"
-        case .inlineACP:
-            return "Ask Antigravity in floating HUD…"
         }
-    }
-
-    private var workspaceOptions: [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for path in [state.settings.selectedWorkspace] + state.settings.recentWorkspaces {
-            if !path.isEmpty && seen.insert(path).inserted {
-                result.append(path)
-            }
-        }
-        return result
     }
 
     private var canSubmit: Bool {
-        !state.acpClient.isStreaming &&
-        (!state.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.attachedCapture != nil)
+        !state.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.attachedCapture != nil
     }
+}
 
-    private func abbreviate(_ path: String) -> String {
-        let home = AppPaths.homeDirectory.path
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
-        }
-        return path
+/// Allows dragging the floating Quick Entry panel from any non-control surface using global mouse deltas,
+/// without letting AppKit hijack button clicks (such as the remove-screenshot `×` button).
+private struct PanelDragModifier: ViewModifier {
+    @State private var dragStartMouse: CGPoint?
+    @State private var dragStartOrigin: CGPoint?
+
+    func body(content: Content) -> some View {
+        content.gesture(
+            DragGesture(minimumDistance: 5)
+                .onChanged { _ in
+                    guard let window = NSApp.windows.first(where: { $0 is QuickEntryPanel && $0.isVisible }) else {
+                        return
+                    }
+                    let mouse = NSEvent.mouseLocation
+                    if dragStartMouse == nil {
+                        dragStartMouse = mouse
+                        dragStartOrigin = window.frame.origin
+                    }
+                    guard let startMouse = dragStartMouse, let startOrigin = dragStartOrigin else { return }
+                    window.setFrameOrigin(NSPoint(
+                        x: startOrigin.x + (mouse.x - startMouse.x),
+                        y: startOrigin.y + (mouse.y - startMouse.y)
+                    ))
+                }
+                .onEnded { _ in
+                    dragStartMouse = nil
+                    dragStartOrigin = nil
+                }
+        )
     }
 }

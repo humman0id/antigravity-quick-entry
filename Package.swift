@@ -17,7 +17,7 @@ let package = Package(
         )
     ],
     targets: [
-        // Pure Swift logic (hotkey state machine, ACP JSON-RPC protocol, path manifest)
+        // Pure Swift logic (hotkey state machine, coordinate geometry, path manifest)
         .target(
             name: "QuickEntryCore",
             path: "Sources/QuickEntryCore"

@@ -13,18 +13,16 @@ Default location: `~/Projects/antigravity-quick-entry/`
 | `Package.swift` | Swift Package manifest (`QuickEntryCore`, `AntigravityQuickEntry`, `QuickEntryCoreTests`) |
 | `Sources/QuickEntryCore/AppPaths.swift` | Single source of truth for all runtime file paths, `AppSettings`, and `CaptureMetadata` |
 | `Sources/QuickEntryCore/DoubleOptionDetector.swift` | Pure deterministic double-tap Option (`⌥ ⌥`) state machine |
-| `Sources/QuickEntryCore/ACPProtocol.swift` | JSON-RPC 2.0 codec for `agy acp` (`initialize`, `session/new`, `session/prompt`, `session/update`, `session/request_permission`, `session/cancel`) |
 | `Sources/QuickEntryCore/CoordinateGeometry.swift` | AppKit ↔ Quartz multi-display coordinate conversion & image long-edge capping |
 | `Sources/AntigravityQuickEntry/main.swift` | Menu-bar-only (`NSApplication.ActivationPolicy.accessory`) entry point |
 | `Sources/AntigravityQuickEntry/AppDelegate.swift` | macOS menu bar `NSStatusItem` (`✦`), live status/permission menu, Settings window |
-| `Sources/AntigravityQuickEntry/AppState.swift` | Central `@MainActor` coordinator between hotkey, capture overlay, HUD, and `agy acp` |
+| `Sources/AntigravityQuickEntry/AppState.swift` | Central `@MainActor` coordinator between hotkey, capture overlay, and Desktop handoff |
 | `Sources/AntigravityQuickEntry/Hotkey/EventTapMonitor.swift` | Passive `CGEventTap` listener for `⌥ ⌥` and optional `⌥ Space` |
-| `Sources/AntigravityQuickEntry/Capture/CaptureOverlayController.swift` | Multi-display `ScreenCaptureKit` drag-region capture overlay (no window tint) |
-| `Sources/AntigravityQuickEntry/Desktop/DesktopAppHandoff.swift` | Direct Antigravity Desktop App handoff (clipboard + `⌘V`/`⌘N`/`↵`, no `agy` CLI required) |
+| `Sources/AntigravityQuickEntry/Capture/CaptureOverlayController.swift` | Multi-display `ScreenCaptureKit` drag-region capture overlay (border-free, no window tint) |
+| `Sources/AntigravityQuickEntry/Desktop/DesktopAppHandoff.swift` | Direct Antigravity Desktop App handoff (clipboard + `⌘V`/`⌘N`/`↵`) |
 | `Sources/AntigravityQuickEntry/Desktop/LaunchAgentManager.swift` | Optional macOS LaunchAgent installer/uninstaller for quiet login auto-start |
-| `Sources/AntigravityQuickEntry/ACP/ACPProcessClient.swift` | Subprocess manager for `agy acp` over stdio pipes + chat session list/resume |
 | `Sources/AntigravityQuickEntry/UI/QuickEntryPanel.swift` | Floating non-activating `NSPanel` (`.canJoinAllSpaces`, `.fullScreenAuxiliary`) |
-| `Sources/AntigravityQuickEntry/UI/ComposerView.swift` | SwiftUI floating composer pill + chat/target picker + expandable streaming HUD |
+| `Sources/AntigravityQuickEntry/UI/ComposerView.swift` | SwiftUI floating composer pill + Desktop target picker |
 | `Sources/AntigravityQuickEntry/UI/SettingsView.swift` | Preferences, activation/auto-start toggles, permissions, and live "Files & Cleanup" inspector |
 | `Tests/QuickEntryCoreTests/*.swift` | Automated `XCTest` unit tests (`swift test`) |
 | `plugin/` | Optional companion Antigravity MCP plugin (`get_latest_screenshot`) + Node.js tests |
@@ -41,7 +39,7 @@ Nothing outside this repository is touched unless you build/run the app on macOS
 | --- | --- | --- | --- |
 | `/Applications/AntigravityQuickEntry.app` | Running `./scripts/bundle-app.sh --install` | Installed macOS menu-bar app bundle | ✅ Yes |
 | `~/Library/LaunchAgents/com.antigravity.quickentry.plist` | Enabling login auto-start (`--autostart` or Settings toggle) | Starts app quietly at login so it wakes whenever Antigravity runs | ✅ Yes (unloaded & deleted) |
-| `~/Library/Application Support/AntigravityQuickEntry/` | First launch / saving settings | `settings.json`, `sessions.json`, and recent workspaces | ✅ Yes |
+| `~/Library/Application Support/AntigravityQuickEntry/` | First launch / saving settings | `settings.json` | ✅ Yes |
 | `~/Library/Caches/AntigravityQuickEntry/` | Taking a screenshot | `latest.png` + `latest.json` (overwritten on each capture) | ✅ Yes |
 | `~/Library/Preferences/com.antigravity.quickentry.plist` | macOS window/defaults state | Standard macOS AppKit preferences plist | ✅ Yes |
 | `~/.antigravity/plugins/quick-capture/` | Only if you install the optional plugin | Companion MCP server (`get_latest_screenshot`) | ✅ Yes |

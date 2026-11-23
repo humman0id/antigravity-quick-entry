@@ -38,10 +38,6 @@ public enum AppPaths {
         appSupportDirectory.appendingPathComponent("settings.json")
     }
 
-    public static var sessionsFileURL: URL {
-        appSupportDirectory.appendingPathComponent("sessions.json")
-    }
-
     public static var latestScreenshotURL: URL {
         cacheDirectory.appendingPathComponent("latest.png")
     }
@@ -67,16 +63,6 @@ public enum AppPaths {
             .appendingPathComponent("\(bundleIdentifier).plist")
     }
 
-    /// Candidate locations for the official Google Antigravity CLI (`agy`).
-    public static var defaultAgyCandidatePaths: [String] {
-        [
-            homeDirectory.appendingPathComponent(".local/bin/agy").path,
-            "/opt/homebrew/bin/agy",
-            "/usr/local/bin/agy",
-            "/usr/bin/agy"
-        ]
-    }
-
     /// Candidate macOS app bundle paths for the Antigravity Desktop App.
     public static var defaultDesktopAppPaths: [String] {
         [
@@ -98,7 +84,7 @@ public enum AppPaths {
         [
             TrackedPathItem(label: "App Bundle", path: installedAppURL.path, purpose: "Compiled macOS menu-bar app"),
             TrackedPathItem(label: "Login Auto-Start Agent", path: launchAgentPlistURL.path, purpose: "Optional LaunchAgent plist (starts quietly at login)"),
-            TrackedPathItem(label: "Settings & Chats", path: appSupportDirectory.path, purpose: "settings.json, sessions.json, and recent workspaces"),
+            TrackedPathItem(label: "Settings", path: appSupportDirectory.path, purpose: "settings.json"),
             TrackedPathItem(label: "Screenshot Cache", path: cacheDirectory.path, purpose: "latest.png and latest.json metadata"),
             TrackedPathItem(label: "Optional MCP Plugin", path: optionalPluginDirectory.path, purpose: "Companion get_latest_screenshot plugin (if installed)")
         ]
@@ -118,67 +104,17 @@ public struct TrackedPathItem: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Where Quick Entry sends your screenshot + prompt.
+/// Where Quick Entry sends your screenshot + prompt inside Antigravity Desktop App.
 public enum DeliveryTarget: String, Codable, CaseIterable, Sendable {
-    /// Pastes screenshot + prompt directly into the active chat in Antigravity Desktop App (no `agy` CLI required).
+    /// Pastes screenshot + prompt directly into the active chat in Antigravity Desktop App.
     case desktopCurrentChat = "desktop_current"
-    /// Opens a new chat (`⌘N`) in Antigravity Desktop App and pastes screenshot + prompt (no `agy` CLI required).
+    /// Opens a new chat (`⌘N`) in Antigravity Desktop App and pastes screenshot + prompt.
     case desktopNewChat = "desktop_new"
-    /// Streams replies right inside the floating HUD via `agy acp` (requires `agy` CLI).
-    case inlineACP = "inline_acp"
 
     public var shortLabel: String {
         switch self {
         case .desktopCurrentChat: return "Desktop · Current Chat"
         case .desktopNewChat: return "Desktop · New Chat"
-        case .inlineACP: return "Inline HUD (agy)"
-        }
-    }
-
-    public var isDesktopHandoff: Bool {
-        self == .desktopCurrentChat || self == .desktopNewChat
-    }
-}
-
-/// Persisted chat entry for switching between Quick Entry / `agy acp` conversations.
-public struct SavedChatSession: Codable, Equatable, Identifiable, Sendable {
-    public let id: String
-    public var title: String
-    public var cwd: String
-    public var updatedAt: Date
-    public var transcriptPreview: String
-
-    public init(
-        id: String,
-        title: String,
-        cwd: String,
-        updatedAt: Date = Date(),
-        transcriptPreview: String = ""
-    ) {
-        self.id = id
-        self.title = title
-        self.cwd = cwd
-        self.updatedAt = updatedAt
-        self.transcriptPreview = transcriptPreview
-    }
-
-    public static func loadAll(from url: URL = AppPaths.sessionsFileURL) -> [SavedChatSession] {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([SavedChatSession].self, from: data) else {
-            return []
-        }
-        return decoded.sorted { $0.updatedAt > $1.updatedAt }
-    }
-
-    public static func saveAll(_ sessions: [SavedChatSession], to url: URL = AppPaths.sessionsFileURL) {
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted]
-        if let data = try? encoder.encode(Array(sessions.prefix(30))) {
-            try? data.write(to: url, options: .atomic)
         }
     }
 }
@@ -202,9 +138,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var onlyActiveWhenAntigravityRunning: Bool
     public var maxDoubleTapIntervalMs: Int
     public var maxSingleTapDurationMs: Int
-    public var customAgyPath: String
-    public var selectedWorkspace: String
-    public var recentWorkspaces: [String]
     public var maxImageLongEdgePx: Int
 
     public init(
@@ -214,9 +147,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         onlyActiveWhenAntigravityRunning: Bool = true,
         maxDoubleTapIntervalMs: Int = 360,
         maxSingleTapDurationMs: Int = 260,
-        customAgyPath: String = "",
-        selectedWorkspace: String = FileManager.default.homeDirectoryForCurrentUser.path,
-        recentWorkspaces: [String] = [],
         maxImageLongEdgePx: Int = 2560
     ) {
         self.shortcutMode = shortcutMode
@@ -225,9 +155,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.onlyActiveWhenAntigravityRunning = onlyActiveWhenAntigravityRunning
         self.maxDoubleTapIntervalMs = maxDoubleTapIntervalMs
         self.maxSingleTapDurationMs = maxSingleTapDurationMs
-        self.customAgyPath = customAgyPath
-        self.selectedWorkspace = selectedWorkspace
-        self.recentWorkspaces = recentWorkspaces
         self.maxImageLongEdgePx = maxImageLongEdgePx
     }
 
@@ -238,25 +165,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case onlyActiveWhenAntigravityRunning
         case maxDoubleTapIntervalMs
         case maxSingleTapDurationMs
-        case customAgyPath
-        case selectedWorkspace
-        case recentWorkspaces
         case maxImageLongEdgePx
     }
 
-    // Resilient decoding so older settings.json files upgrade smoothly without losing user preferences.
+    // Resilient decoding so older settings.json files (including removed inline_acp target) upgrade smoothly.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.shortcutMode = try c.decodeIfPresent(TriggerShortcutMode.self, forKey: .shortcutMode) ?? .doubleOption
-        self.deliveryTarget = try c.decodeIfPresent(DeliveryTarget.self, forKey: .deliveryTarget) ?? .desktopCurrentChat
+        self.shortcutMode = (try? c.decodeIfPresent(TriggerShortcutMode.self, forKey: .shortcutMode)) ?? .doubleOption
+        self.deliveryTarget = (try? c.decodeIfPresent(DeliveryTarget.self, forKey: .deliveryTarget)) ?? .desktopCurrentChat
         self.autoSubmitDesktopHandoff = try c.decodeIfPresent(Bool.self, forKey: .autoSubmitDesktopHandoff) ?? true
         self.onlyActiveWhenAntigravityRunning = try c.decodeIfPresent(Bool.self, forKey: .onlyActiveWhenAntigravityRunning) ?? true
         self.maxDoubleTapIntervalMs = try c.decodeIfPresent(Int.self, forKey: .maxDoubleTapIntervalMs) ?? 360
         self.maxSingleTapDurationMs = try c.decodeIfPresent(Int.self, forKey: .maxSingleTapDurationMs) ?? 260
-        self.customAgyPath = try c.decodeIfPresent(String.self, forKey: .customAgyPath) ?? ""
-        self.selectedWorkspace = try c.decodeIfPresent(String.self, forKey: .selectedWorkspace)
-            ?? FileManager.default.homeDirectoryForCurrentUser.path
-        self.recentWorkspaces = try c.decodeIfPresent([String].self, forKey: .recentWorkspaces) ?? []
         self.maxImageLongEdgePx = try c.decodeIfPresent(Int.self, forKey: .maxImageLongEdgePx) ?? 2560
     }
 
@@ -278,20 +198,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let data = try encoder.encode(self)
         try data.write(to: url, options: .atomic)
     }
-
-    public mutating func recordWorkspace(_ path: String) {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        selectedWorkspace = trimmed
-        recentWorkspaces.removeAll { $0 == trimmed }
-        recentWorkspaces.insert(trimmed, at: 0)
-        if recentWorkspaces.count > 8 {
-            recentWorkspaces = Array(recentWorkspaces.prefix(8))
-        }
-    }
 }
 
-/// Metadata written alongside `latest.png` so the optional MCP plugin and HUD know capture context.
+/// Metadata written alongside `latest.png` so the optional MCP plugin knows capture context.
 public struct CaptureMetadata: Codable, Equatable, Sendable {
     public let label: String
     public let kind: String // "window" | "region"

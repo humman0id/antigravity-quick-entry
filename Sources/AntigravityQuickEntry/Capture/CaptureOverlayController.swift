@@ -1,8 +1,11 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import ImageIO
+import QuartzCore
 import QuickEntryCore
 import ScreenCaptureKit
+import UniformTypeIdentifiers
 
 /// Captured screenshot ready to attach in the floating composer and send to Antigravity.
 public struct CapturedAttachment: Equatable {
@@ -21,11 +24,19 @@ public struct CapturedAttachment: Equatable {
 @MainActor
 public final class CaptureOverlayController {
     private var overlayWindows: [CaptureOverlayWindow] = []
-    private var shareableContent: SCShareableContent?
+    private var captureTask: Task<Void, Never>?
     private var maxLongEdgePx: Int = 2560
+
+    /// True while the user is holding/dragging a selection rectangle on the overlay.
+    public private(set) var isDragging: Bool = false
+    /// True while an accepted region capture is finishing ScreenCaptureKit + PNG encoding.
+    public private(set) var isCapturingRegion: Bool = false
+    /// True whenever a screenshot interaction is actively underway and should not be cancelled by focus events.
+    public var isActivelyCapturing: Bool { isDragging || isCapturingRegion }
 
     public var onCaptureCompleted: ((CapturedAttachment) -> Void)?
     public var onCaptureCancelled: (() -> Void)?
+    public var onClickOutside: (() -> Void)?
     public var onCaptureError: ((String) -> Void)?
 
     public init() {}
@@ -47,6 +58,9 @@ public final class CaptureOverlayController {
     /// Shows drag-to-capture overlays on every connected display.
     public func beginCapture(maxLongEdgePx: Int = 2560) {
         self.maxLongEdgePx = maxLongEdgePx
+        captureTask?.cancel()
+        captureTask = nil
+        isCapturingRegion = false
         dismiss()
 
         guard Self.isScreenRecordingGranted() else {
@@ -55,22 +69,18 @@ public final class CaptureOverlayController {
             return
         }
 
-        Task {
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                self.shareableContent = content
-                self.presentOverlayPanels()
-            } catch {
-                self.onCaptureError?("Failed to prepare screen capture: \(error.localizedDescription)")
-            }
-        }
+        presentOverlayPanels()
     }
 
     public func dismiss() {
+        isDragging = false
         for win in overlayWindows {
+            win.contentView?.isHidden = true
+            win.alphaValue = 0
             win.orderOut(nil)
         }
         overlayWindows.removeAll()
+        CATransaction.flush()
         NSCursor.arrow.set()
     }
 
@@ -78,10 +88,23 @@ public final class CaptureOverlayController {
         for screen in NSScreen.screens {
             let panel = CaptureOverlayWindow(
                 screen: screen,
+                onDragStateChanged: { [weak self] dragging in
+                    self?.isDragging = dragging
+                },
                 onSelectRegion: { [weak self] globalAppKitRect, targetScreen in
                     self?.capture(globalAppKitRect: globalAppKitRect, screen: targetScreen)
                 },
+                onClickOutside: { [weak self] in
+                    self?.captureTask?.cancel()
+                    self?.captureTask = nil
+                    self?.isCapturingRegion = false
+                    self?.dismiss()
+                    self?.onClickOutside?()
+                },
                 onCancel: { [weak self] in
+                    self?.captureTask?.cancel()
+                    self?.captureTask = nil
+                    self?.isCapturingRegion = false
                     self?.dismiss()
                     self?.onCaptureCancelled?()
                 }
@@ -94,18 +117,43 @@ public final class CaptureOverlayController {
     }
 
     private func capture(globalAppKitRect: CGRect, screen: NSScreen) {
-        dismiss()
-        guard let content = shareableContent else { return }
+        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+            dismiss()
+            onCaptureError?("Display not found for selection.")
+            return
+        }
+        let backingScaleFactor = screen.backingScaleFactor
+        let maxLongEdge = maxLongEdgePx
+        let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
+        let overlayWindowIDs = Set(overlayWindows.compactMap { win -> CGWindowID? in
+            win.windowNumber > 0 ? CGWindowID(win.windowNumber) : nil
+        })
 
-        Task {
+        // Hide and flush all overlay panels immediately before fetching shareable content or capturing.
+        isCapturingRegion = true
+        dismiss()
+
+        captureTask?.cancel()
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.isCapturingRegion = false }
             do {
-                let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
+                // Allow WindowServer to commit the overlay order-out (~3 frames at 60Hz)
+                // so no selection stroke or fill can linger in the compositor.
+                try await Task.sleep(nanoseconds: 50_000_000)
+                try Task.checkCancellation()
+
+                // Fetch fresh SCShareableContent AFTER the overlay is dismissed.
+                // Using onScreenWindowsOnly: false ensures any transitioning window of our PID
+                // is still included in exclusion filters.
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                try Task.checkCancellation()
+
                 let quartzRect = CoordinateGeometry.appKitToQuartz(
                     rect: globalAppKitRect,
                     primaryDisplayHeight: primaryHeight
                 )
-                guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
-                      let scDisplay = content.displays.first(where: { $0.displayID == displayID }) else {
+                guard let scDisplay = content.displays.first(where: { $0.displayID == displayID }) else {
                     throw NSError(domain: "CaptureOverlayController", code: 1, userInfo: [NSLocalizedDescriptionKey: "Display not found for selection."])
                 }
 
@@ -117,13 +165,31 @@ public final class CaptureOverlayController {
 
                 let dims = CoordinateGeometry.scaledPixelSize(
                     pointSize: localSourceRect.size,
-                    backingScaleFactor: screen.backingScaleFactor,
-                    maxLongEdge: maxLongEdgePx
+                    backingScaleFactor: backingScaleFactor,
+                    maxLongEdge: maxLongEdge
                 )
 
+                // Exclude our entire application (overlay panels, floating composer, settings) at
+                // the compositor level, falling back to explicit window exclusion if needed.
                 let ownPID = ProcessInfo.processInfo.processIdentifier
-                let ownSCWindows = content.windows.filter { $0.owningApplication?.processID == ownPID }
-                let filter = SCContentFilter(display: scDisplay, excludingWindows: ownSCWindows)
+                let ownApps = content.applications.filter { $0.processID == ownPID }
+                let ownSCWindows = content.windows.filter {
+                    $0.owningApplication?.processID == ownPID || overlayWindowIDs.contains($0.windowID)
+                }
+
+                let filter: SCContentFilter
+                if !ownApps.isEmpty {
+                    filter = SCContentFilter(
+                        display: scDisplay,
+                        excludingApplications: ownApps,
+                        exceptingWindows: []
+                    )
+                } else {
+                    filter = SCContentFilter(
+                        display: scDisplay,
+                        excludingWindows: ownSCWindows
+                    )
+                }
 
                 let config = SCStreamConfiguration()
                 config.sourceRect = localSourceRect
@@ -136,40 +202,60 @@ public final class CaptureOverlayController {
                     contentFilter: filter,
                     configuration: config
                 )
+                try Task.checkCancellation()
 
-                let attachment = try buildAttachment(
-                    from: cgImage,
-                    label: "Region \(cgImage.width)×\(cgImage.height) px"
-                )
+                let label = "Region \(cgImage.width)×\(cgImage.height) px"
+                let (pngData, metadata) = try await Self.encodeAndPersistPNG(from: cgImage, label: label)
+                try Task.checkCancellation()
+
+                let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                let attachment = CapturedAttachment(pngData: pngData, previewImage: nsImage, metadata: metadata)
                 onCaptureCompleted?(attachment)
+            } catch is CancellationError {
+                return
             } catch {
                 onCaptureError?("Region capture failed: \(error.localizedDescription)")
             }
         }
     }
 
-    private func buildAttachment(from cgImage: CGImage, label: String) throws -> CapturedAttachment {
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let pngData = rep.representation(using: .png, properties: [:]) else {
-            throw NSError(domain: "CaptureOverlayController", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to encode PNG screenshot."])
-        }
+    /// Encodes `cgImage` to PNG using ImageIO and writes cache files off `@MainActor`.
+    private nonisolated static func encodeAndPersistPNG(
+        from cgImage: CGImage,
+        label: String
+    ) async throws -> (Data, CaptureMetadata) {
+        try await Task.detached(priority: .userInitiated) {
+            let mutableData = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(
+                mutableData,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+            ) else {
+                throw NSError(domain: "CaptureOverlayController", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize PNG encoder."])
+            }
+            CGImageDestinationAddImage(destination, cgImage, nil)
+            guard CGImageDestinationFinalize(destination) else {
+                throw NSError(domain: "CaptureOverlayController", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to encode PNG screenshot."])
+            }
+            let pngData = mutableData as Data
 
-        let metadata = CaptureMetadata(
-            label: label,
-            kind: "region",
-            widthPx: cgImage.width,
-            heightPx: cgImage.height
-        )
+            let metadata = CaptureMetadata(
+                label: label,
+                kind: "region",
+                widthPx: cgImage.width,
+                heightPx: cgImage.height
+            )
 
-        // Persist latest capture to ~/Library/Caches/AntigravityQuickEntry/ for optional companion MCP plugin
-        try? AppPaths.ensureDirectoriesExist()
-        try? pngData.write(to: AppPaths.latestScreenshotURL, options: .atomic)
-        if let metaData = try? JSONEncoder().encode(metadata) {
-            try? metaData.write(to: AppPaths.latestMetadataURL, options: .atomic)
-        }
+            // Persist latest capture to ~/Library/Caches/AntigravityQuickEntry/ for optional companion MCP plugin
+            try? AppPaths.ensureDirectoriesExist()
+            try? pngData.write(to: AppPaths.latestScreenshotURL, options: .atomic)
+            if let metaData = try? JSONEncoder().encode(metadata) {
+                try? metaData.write(to: AppPaths.latestMetadataURL, options: .atomic)
+            }
 
-        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-        return CapturedAttachment(pngData: pngData, previewImage: nsImage, metadata: metadata)
+            return (pngData, metadata)
+        }.value
     }
 }
 
@@ -178,7 +264,9 @@ public final class CaptureOverlayController {
 private final class CaptureOverlayWindow: NSPanel {
     init(
         screen: NSScreen,
+        onDragStateChanged: @escaping (Bool) -> Void,
         onSelectRegion: @escaping (CGRect, NSScreen) -> Void,
+        onClickOutside: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
         super.init(
@@ -187,6 +275,8 @@ private final class CaptureOverlayWindow: NSPanel {
             backing: .buffered,
             defer: false
         )
+        isReleasedWhenClosed = false
+        animationBehavior = .none
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -197,7 +287,9 @@ private final class CaptureOverlayWindow: NSPanel {
         let view = CaptureOverlayCanvasView(
             frame: NSRect(origin: .zero, size: screen.frame.size),
             screen: screen,
+            onDragStateChanged: onDragStateChanged,
             onSelectRegion: onSelectRegion,
+            onClickOutside: onClickOutside,
             onCancel: onCancel
         )
         contentView = view
@@ -209,7 +301,9 @@ private final class CaptureOverlayWindow: NSPanel {
 
 private final class CaptureOverlayCanvasView: NSView {
     private let screen: NSScreen
+    private let onDragStateChanged: (Bool) -> Void
     private let onSelectRegion: (CGRect, NSScreen) -> Void
+    private let onClickOutside: () -> Void
     private let onCancel: () -> Void
 
     private var dragOrigin: CGPoint?
@@ -219,11 +313,15 @@ private final class CaptureOverlayCanvasView: NSView {
     init(
         frame: NSRect,
         screen: NSScreen,
+        onDragStateChanged: @escaping (Bool) -> Void,
         onSelectRegion: @escaping (CGRect, NSScreen) -> Void,
+        onClickOutside: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.screen = screen
+        self.onDragStateChanged = onDragStateChanged
         self.onSelectRegion = onSelectRegion
+        self.onClickOutside = onClickOutside
         self.onCancel = onCancel
         super.init(frame: frame)
     }
@@ -257,6 +355,7 @@ private final class CaptureOverlayCanvasView: NSView {
         let localPt = convert(event.locationInWindow, from: nil)
         dragOrigin = localPt
         dragCurrent = localPt
+        onDragStateChanged(true)
         needsDisplay = true
     }
 
@@ -270,6 +369,7 @@ private final class CaptureOverlayCanvasView: NSView {
         let end = convert(event.locationInWindow, from: nil)
         dragOrigin = nil
         dragCurrent = nil
+        onDragStateChanged(false)
 
         let localRect = CGRect(
             x: min(start.x, end.x),
@@ -285,13 +385,16 @@ private final class CaptureOverlayCanvasView: NSView {
                 width: localRect.width,
                 height: localRect.height
             )
+            isHidden = true
             onSelectRegion(globalAppKitRect, screen)
         } else {
-            needsDisplay = true
+            // A quick click outside the Quick Entry panel (without dragging a region) dismisses it.
+            onClickOutside()
         }
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        onDragStateChanged(false)
         onCancel()
     }
 
@@ -320,10 +423,27 @@ private final class CaptureOverlayCanvasView: NSView {
             }
         }
 
-        drawPill(
-            text: "Drag to capture a region · Esc or right-click to cancel",
-            near: CGPoint(x: max(16, bounds.midX - 185), y: bounds.maxY - 56)
+        drawCenteredTopPill(text: "Drag to capture a region · Esc or right-click to cancel")
+    }
+
+    private var topSafeInset: CGFloat {
+        max(screen.safeAreaInsets.top, max(0, screen.frame.maxY - screen.visibleFrame.maxY))
+    }
+
+    private func drawCenteredTopPill(text: String) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.white
+        ]
+        let size = (text as NSString).size(withAttributes: attrs)
+        let pillWidth = size.width + 24
+        let pillHeight = size.height + 12
+        let topClearance = topSafeInset + 24
+        let origin = CGPoint(
+            x: (bounds.width - pillWidth) / 2.0,
+            y: bounds.maxY - topClearance - pillHeight
         )
+        drawPill(text: text, near: origin)
     }
 
     private func drawPill(text: String, near origin: CGPoint) {
@@ -333,11 +453,13 @@ private final class CaptureOverlayCanvasView: NSView {
         ]
         let nsText = text as NSString
         let size = nsText.size(withAttributes: attrs)
+        let pillHeight = size.height + 12
+        let maxY = bounds.maxY - topSafeInset - pillHeight - 16
         let pillRect = CGRect(
             x: min(max(12, origin.x), bounds.maxX - size.width - 36),
-            y: min(max(12, origin.y), bounds.maxY - size.height - 20),
+            y: min(max(12, origin.y), max(12, maxY)),
             width: size.width + 24,
-            height: size.height + 12
+            height: pillHeight
         )
         NSColor.black.withAlphaComponent(0.76).setFill()
         NSBezierPath(roundedRect: pillRect, xRadius: pillRect.height / 2, yRadius: pillRect.height / 2).fill()

@@ -3,36 +3,37 @@ import Combine
 import Foundation
 import QuickEntryCore
 
-/// Central observable state shared between the menu bar, floating HUD, capture overlay, and Settings.
+/// Central observable state shared between the menu bar, floating composer, capture overlay, and Settings.
 @MainActor
 public final class AppState: ObservableObject {
     @Published public var settings: AppSettings
     @Published public var promptText: String = ""
     @Published public var attachedCapture: CapturedAttachment?
-    @Published public var isHUDExpanded: Bool = false
     @Published public var isPanelVisible: Bool = false
     @Published public var isCaptureOverlayActive: Bool = false
     @Published public var captureError: String?
     @Published public var handoffError: String?
     @Published public var accessibilityGranted: Bool = false
     @Published public var screenRecordingGranted: Bool = false
-    @Published public var lastSubmittedPrompt: String = ""
     @Published public var openDesktopWindows: [DetectedDesktopWindow] = []
     @Published public var selectedDesktopWindowPID: pid_t?
     @Published public private(set) var isAntigravityRunning: Bool = false
+    @Published public private(set) var isAntigravityFrontmost: Bool = false
     @Published public var launchAtLoginEnabled: Bool = false
 
-    public let acpClient = ACPProcessClient()
     public let captureController = CaptureOverlayController()
     public let hotkeyMonitor = EventTapMonitor()
 
     public var onShowPanel: (() -> Void)?
     public var onHidePanel: (() -> Void)?
-    public var onResizePanel: ((Bool) -> Void)?
     public var onActivationStateChanged: ((Bool) -> Void)?
 
-    private var cancellables = Set<AnyCancellable>()
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var menuObservers: [NSObjectProtocol] = []
+    private var outsideClickMonitor: Any?
+    private var accessibilityPollTask: Task<Void, Never>?
+    private var isTrackingMenu: Bool = false
+    private var lastPanelShownUptime: TimeInterval = 0
 
     /// Whether the global shortcut (`⌥ ⌥`) should currently be armed.
     public var isQuickEntryActive: Bool {
@@ -44,16 +45,9 @@ public final class AppState: ObservableObject {
         self.launchAtLoginEnabled = LaunchAgentManager.isInstalled
         try? AppPaths.ensureDirectoriesExist()
 
-        // Forward ACPClient updates to SwiftUI views observing AppState
-        acpClient.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-            .store(in: &cancellables)
-
         configureCallbacks()
         observeWorkspaceLifecycle()
+        observeMenuTracking()
         refreshPermissions()
         applySettings()
     }
@@ -68,11 +62,17 @@ public final class AppState: ObservableObject {
             self.isCaptureOverlayActive = false
             self.captureError = nil
             self.attachedCapture = attachment
+            self.lastPanelShownUptime = ProcessInfo.processInfo.systemUptime
             self.onShowPanel?()
         }
 
         captureController.onCaptureCancelled = { [weak self] in
             self?.isCaptureOverlayActive = false
+        }
+
+        captureController.onClickOutside = { [weak self] in
+            self?.isCaptureOverlayActive = false
+            self?.dismissQuickEntry()
         }
 
         captureController.onCaptureError = { [weak self] errorMsg in
@@ -101,16 +101,78 @@ public final class AppState: ObservableObject {
                 self?.syncActivationState()
             }
         }
-        workspaceObservers = [onLaunch, onTerminate]
+        let onActivate = nc.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let activatedApp = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let activatedPID = activatedApp?.processIdentifier
+            let ownPID = ProcessInfo.processInfo.processIdentifier
+            Task { @MainActor in
+                self?.isAntigravityFrontmost = DesktopAppHandoff.isAntigravityFrontmost()
+                if activatedPID != ownPID {
+                    self?.handlePanelUnfocused()
+                }
+            }
+        }
+        workspaceObservers = [onLaunch, onTerminate, onActivate]
+    }
+
+    private func observeMenuTracking() {
+        let nc = NotificationCenter.default
+        let onBegin = nc.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isTrackingMenu = true
+            }
+        }
+        let onEnd = nc.addObserver(
+            forName: NSMenu.didEndTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                self?.isTrackingMenu = false
+            }
+        }
+        menuObservers = [onBegin, onEnd]
     }
 
     public func refreshPermissions() {
         accessibilityGranted = EventTapMonitor.isAccessibilityGranted(prompt: false)
         screenRecordingGranted = CaptureOverlayController.isScreenRecordingGranted()
         syncActivationState()
+        updateAccessibilityWatcher()
+    }
+
+    /// Quietly polls Accessibility trust while ungranted so `⌥ ⌥` arms immediately
+    /// after toggling the switch in System Settings without needing a manual re-check.
+    private func updateAccessibilityWatcher() {
+        if accessibilityGranted {
+            accessibilityPollTask?.cancel()
+            accessibilityPollTask = nil
+            return
+        }
+        guard accessibilityPollTask == nil else { return }
+        accessibilityPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled, let self else { break }
+                if EventTapMonitor.isAccessibilityGranted(prompt: false) {
+                    self.refreshPermissions()
+                    break
+                }
+            }
+        }
     }
 
     public func refreshOpenDesktopWindows() {
+        isAntigravityFrontmost = DesktopAppHandoff.isAntigravityFrontmost()
         openDesktopWindows = DesktopAppHandoff.listOpenDesktopWindows()
         if let pid = selectedDesktopWindowPID,
            !openDesktopWindows.contains(where: { $0.pid == pid }) {
@@ -150,7 +212,6 @@ public final class AppState: ObservableObject {
 
     public func applySettings() {
         hotkeyMonitor.updateSettings(settings)
-        acpClient.updateCustomBinaryPath(settings.customAgyPath)
         try? settings.save()
         syncActivationState()
     }
@@ -169,12 +230,43 @@ public final class AppState: ObservableObject {
         captureError = nil
         handoffError = nil
         isPanelVisible = true
+        lastPanelShownUptime = ProcessInfo.processInfo.systemUptime
+        installOutsideClickMonitor()
         onShowPanel?()
-        onResizePanel?(isHUDExpanded)
 
         if withCaptureOverlay && screenRecordingGranted {
             isCaptureOverlayActive = true
             captureController.beginCapture(maxLongEdgePx: settings.maxImageLongEdgePx)
+        }
+    }
+
+    /// Closes Quick Entry when the user clicks away or switches apps (`⌘Tab`),
+    /// while preserving the panel during active drag-to-screenshot capture, dropdown menus, or modal dialogs.
+    public func handlePanelUnfocused(bypassGracePeriod: Bool = false) {
+        guard isPanelVisible else { return }
+        guard !captureController.isActivelyCapturing else { return }
+        guard !isTrackingMenu && NSApp.modalWindow == nil else { return }
+        if !bypassGracePeriod {
+            guard ProcessInfo.processInfo.systemUptime - lastPanelShownUptime >= 0.18 else { return }
+        }
+        dismissQuickEntry()
+    }
+
+    private func installOutsideClickMonitor() {
+        removeOutsideClickMonitor()
+        // Global monitors only receive mouse-down events delivered to OTHER applications,
+        // so clicks inside QuickEntryPanel or CaptureOverlayWindow never trigger this.
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in
+                self?.handlePanelUnfocused(bypassGracePeriod: true)
+            }
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
         }
     }
 
@@ -194,12 +286,10 @@ public final class AppState: ObservableObject {
     }
 
     public func dismissQuickEntry() {
+        removeOutsideClickMonitor()
         if isCaptureOverlayActive {
             isCaptureOverlayActive = false
             captureController.dismiss()
-        }
-        if acpClient.isStreaming {
-            acpClient.cancelActiveTurn()
         }
         isPanelVisible = false
         onHidePanel?()
@@ -209,20 +299,7 @@ public final class AppState: ObservableObject {
         settings.deliveryTarget = target
         selectedDesktopWindowPID = desktopPID
         handoffError = nil
-        if target.isDesktopHandoff {
-            isHUDExpanded = false
-            onResizePanel?(false)
-        }
         applySettings()
-    }
-
-    public func selectSavedACPChat(_ session: SavedChatSession) {
-        settings.deliveryTarget = .inlineACP
-        settings.recordWorkspace(session.cwd)
-        applySettings()
-        acpClient.selectSession(session)
-        isHUDExpanded = !session.transcriptPreview.isEmpty
-        onResizePanel?(isHUDExpanded)
     }
 
     public func submitPrompt() {
@@ -236,79 +313,51 @@ public final class AppState: ObservableObject {
 
         handoffError = nil
 
-        if settings.deliveryTarget.isDesktopHandoff {
-            let textToSend = trimmed
-            let captureToSend = attachedCapture
-            let startNew = (settings.deliveryTarget == .desktopNewChat)
-            let autoSubmit = settings.autoSubmitDesktopHandoff
-            let targetPID = selectedDesktopWindowPID
+        let textToSend = trimmed
+        let captureToSend = attachedCapture
+        let startNew = (settings.deliveryTarget == .desktopNewChat)
+        let autoSubmit = settings.autoSubmitDesktopHandoff
+        let targetPID = selectedDesktopWindowPID
 
-            // Clear and hide Quick Entry so Antigravity Desktop App receives clean focus
-            promptText = ""
-            attachedCapture = nil
-            isPanelVisible = false
-            onHidePanel?()
-
-            Task {
-                if let err = await DesktopAppHandoff.handoff(
-                    promptText: textToSend,
-                    attachment: captureToSend,
-                    preferredPID: targetPID,
-                    startNewChat: startNew,
-                    autoSubmit: autoSubmit
-                ) {
-                    self.handoffError = err
-                    self.promptText = textToSend
-                    self.attachedCapture = captureToSend
-                    self.isPanelVisible = true
-                    self.onShowPanel?()
-                }
-            }
-            return
-        }
-
-        // Inline HUD mode via `agy acp`
-        let effectivePrompt = trimmed.isEmpty ? "Describe what is shown in this screenshot and highlight any issues." : trimmed
-        let pngData = attachedCapture?.pngData
-        let cwd = settings.selectedWorkspace
-
-        lastSubmittedPrompt = effectivePrompt
+        // Clear and hide Quick Entry so Antigravity Desktop App receives clean focus
         promptText = ""
-        isHUDExpanded = true
-        onResizePanel?(true)
+        attachedCapture = nil
+        isPanelVisible = false
+        removeOutsideClickMonitor()
+        onHidePanel?()
 
         Task {
-            await acpClient.sendPrompt(text: effectivePrompt, imagePNGData: pngData, cwd: cwd)
-        }
-    }
-
-    public func startNewChat() {
-        acpClient.resetSession()
-        lastSubmittedPrompt = ""
-        attachedCapture = nil
-        isHUDExpanded = false
-        onResizePanel?(false)
-    }
-
-    public func chooseWorkspaceFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Select Workspace"
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.recordWorkspace(url.path)
-            applySettings()
+            if let err = await DesktopAppHandoff.handoff(
+                promptText: textToSend,
+                attachment: captureToSend,
+                preferredPID: targetPID,
+                startNewChat: startNew,
+                autoSubmit: autoSubmit
+            ) {
+                self.handoffError = err
+                self.promptText = textToSend
+                self.attachedCapture = captureToSend
+                self.isPanelVisible = true
+                self.lastPanelShownUptime = ProcessInfo.processInfo.systemUptime
+                self.installOutsideClickMonitor()
+                self.onShowPanel?()
+            }
         }
     }
 
     public func shutdown() {
+        removeOutsideClickMonitor()
+        accessibilityPollTask?.cancel()
+        accessibilityPollTask = nil
         for observer in workspaceObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         workspaceObservers.removeAll()
+        for observer in menuObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        menuObservers.removeAll()
         captureController.dismiss()
         hotkeyMonitor.stop()
-        acpClient.stop()
     }
 }

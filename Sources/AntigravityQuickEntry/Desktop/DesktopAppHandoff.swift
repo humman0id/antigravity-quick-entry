@@ -26,12 +26,31 @@ public enum DesktopAppHandoff {
     public static func findRunningAntigravityApps() -> [NSRunningApplication] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         return NSWorkspace.shared.runningApplications.filter { app in
-            guard app.processIdentifier != ownPID else { return false }
+            guard app.processIdentifier != ownPID,
+                  !app.isTerminated,
+                  app.activationPolicy == .regular else {
+                return false
+            }
             let name = (app.localizedName ?? "").lowercased()
             let bid = (app.bundleIdentifier ?? "").lowercased()
             if bid == AppPaths.bundleIdentifier.lowercased() { return false }
             return name.contains("antigravity") || bid.contains("antigravity") || bid.contains("jetski")
         }
+    }
+
+    /// Returns true if the currently frontmost macOS application is Antigravity Desktop App.
+    public static func isAntigravityFrontmost() -> Bool {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return false }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard front.processIdentifier != ownPID,
+              !front.isTerminated,
+              front.activationPolicy == .regular else {
+            return false
+        }
+        let name = (front.localizedName ?? "").lowercased()
+        let bid = (front.bundleIdentifier ?? "").lowercased()
+        if bid == AppPaths.bundleIdentifier.lowercased() { return false }
+        return name.contains("antigravity") || bid.contains("antigravity") || bid.contains("jetski")
     }
 
     /// Lists currently open Antigravity Desktop / IDE windows so the user can target a specific window.
@@ -58,6 +77,11 @@ public enum DesktopAppHandoff {
             guard let app = appsByPID[pid] else { continue }
             let layer = (dict[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
             guard layer == 0 else { continue }
+            if let boundsDict = dict[kCGWindowBounds as String] as? NSDictionary,
+               let rect = CGRect(dictionaryRepresentation: boundsDict),
+               rect.width < 200 || rect.height < 120 {
+                continue
+            }
             let winNum = (dict[kCGWindowNumber as String] as? NSNumber)?.intValue ?? Int(pid)
             let title = (dict[kCGWindowName as String] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             results.append(
@@ -107,24 +131,26 @@ public enum DesktopAppHandoff {
 
         app.unhide()
         app.activate()
-        try? await Task.sleep(nanoseconds: 220_000_000)
+        await waitUntilActive(app, timeoutMs: 900)
+        // Brief settle after activation so Chromium/Electron restores input focus cleanly
+        try? await Task.sleep(nanoseconds: 90_000_000)
 
         if startNewChat {
             sendKey(keyCode: 45, flags: .maskCommand) // ⌘N
-            try? await Task.sleep(nanoseconds: 320_000_000)
+            try? await Task.sleep(nanoseconds: 340_000_000)
         }
 
         if let attachment {
             writeImageToPasteboard(pngData: attachment.pngData, image: attachment.previewImage)
             sendKey(keyCode: 9, flags: .maskCommand) // ⌘V
-            try? await Task.sleep(nanoseconds: 380_000_000)
+            try? await Task.sleep(nanoseconds: 420_000_000)
         }
 
         let trimmed = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             writeTextToPasteboard(trimmed)
             sendKey(keyCode: 9, flags: .maskCommand) // ⌘V
-            try? await Task.sleep(nanoseconds: 160_000_000)
+            try? await Task.sleep(nanoseconds: 180_000_000)
         }
 
         if autoSubmit {
@@ -132,6 +158,13 @@ public enum DesktopAppHandoff {
         }
 
         return nil
+    }
+
+    private static func waitUntilActive(_ app: NSRunningApplication, timeoutMs: Int) async {
+        let deadline = ProcessInfo.processInfo.systemUptime + (Double(timeoutMs) / 1000.0)
+        while !app.isActive && ProcessInfo.processInfo.systemUptime < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     private static func launchDesktopAppIfInstalled() async -> NSRunningApplication? {

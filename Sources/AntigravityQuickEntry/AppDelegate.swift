@@ -19,16 +19,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         quickEntryPanel.onEscapePressed = { [weak self] in
             self?.appState.dismissQuickEntry()
         }
+        quickEntryPanel.onResignKey = { [weak self] in
+            self?.appState.handlePanelUnfocused()
+        }
 
         appState.onShowPanel = { [weak self] in
-            guard let self else { return }
-            self.quickEntryPanel.showBottomCenterOnActiveScreen(expanded: self.appState.isHUDExpanded)
+            self?.quickEntryPanel.showOrFocus()
         }
         appState.onHidePanel = { [weak self] in
             self?.quickEntryPanel.orderOut(nil)
-        }
-        appState.onResizePanel = { [weak self] expanded in
-            self?.quickEntryPanel.updateHeight(expanded: expanded)
         }
         appState.onActivationStateChanged = { [weak self] active in
             self?.updateStatusItemAppearance(active: active)
@@ -95,16 +94,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
 
         menu.addItem(.separator())
 
-        let modeLabel = appState.settings.deliveryTarget.isDesktopHandoff
-            ? "Target: \(appState.settings.deliveryTarget.shortLabel)"
-            : "Inline HUD: \(appState.acpClient.connectionState.label)"
-        let acpStatusItem = NSMenuItem(
-            title: modeLabel,
+        let targetItem = NSMenuItem(
+            title: "Target: \(appState.settings.deliveryTarget.shortLabel)",
             action: nil,
             keyEquivalent: ""
         )
-        acpStatusItem.isEnabled = false
-        menu.addItem(acpStatusItem)
+        targetItem.isEnabled = false
+        menu.addItem(targetItem)
 
         let axTitle = appState.accessibilityGranted
             ? "Accessibility: Granted ✓"
@@ -146,7 +142,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
     }
 
     @objc private func handleOpenQuickEntry() {
-        appState.summonQuickEntry(withCaptureOverlay: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.appState.summonQuickEntry(withCaptureOverlay: true)
+        }
     }
 
     @objc private func handleOpenAccessibility() {

@@ -4,7 +4,8 @@ set -euo pipefail
 # Builds AntigravityQuickEntry on macOS and packages it into a menu-bar `.app` bundle.
 # Usage:
 #   ./scripts/bundle-app.sh                       # builds into ./dist/AntigravityQuickEntry.app
-#   ./scripts/bundle-app.sh --install             # installs to /Applications/AntigravityQuickEntry.app
+#   ./scripts/bundle-app.sh --install             # installs to /Applications/AntigravityQuickEntry.app & relaunches
+#   ./scripts/bundle-app.sh --install --no-launch # installs without launching
 #   ./scripts/bundle-app.sh --install --autostart # installs + starts quietly at login (active when Antigravity runs)
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -19,11 +20,13 @@ DIST_DIR="${REPO_ROOT}/dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
 INSTALL_TO_APPS=false
 INSTALL_AUTOSTART=false
+AUTO_LAUNCH=true
 
 for arg in "$@"; do
   case "$arg" in
     --install) INSTALL_TO_APPS=true ;;
     --autostart) INSTALL_AUTOSTART=true ;;
+    --no-launch) AUTO_LAUNCH=false ;;
     *)
       echo "Unknown argument: $arg" >&2
       exit 1
@@ -81,8 +84,23 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-echo "==> Ad-hoc code signing bundle (helps macOS TCC remember permissions)..."
-codesign --force --deep --sign - "$APP_BUNDLE"
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  if echo "$IDENTITIES" | grep -q '"AntigravityQuickEntry Dev"'; then
+    SIGN_IDENTITY="AntigravityQuickEntry Dev"
+  elif echo "$IDENTITIES" | grep -q '"Apple Development:'; then
+    SIGN_IDENTITY="$(echo "$IDENTITIES" | sed -n 's/.*"Apple Development:\([^"]*\)".*/Apple Development:\1/p' | head -n 1)"
+  fi
+fi
+
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  echo "==> Code signing bundle with persistent identity: ${SIGN_IDENTITY}..."
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+else
+  echo "==> Ad-hoc code signing bundle (no persistent signing cert found; macOS TCC will re-prompt after rebuilds)..."
+  codesign --force --deep --sign - "$APP_BUNDLE"
+fi
 
 echo "==> Built: ${APP_BUNDLE}"
 
@@ -125,4 +143,9 @@ EOF
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT" 2>/dev/null || true
 fi
 
-echo "==> Launch with: open \"${FINAL_APP_PATH}\""
+if [[ "$INSTALL_TO_APPS" == "true" && "$AUTO_LAUNCH" == "true" && "$INSTALL_AUTOSTART" == "false" ]]; then
+  echo "==> Relaunching ${FINAL_APP_PATH}..."
+  open "$FINAL_APP_PATH" || echo "==> Launch manually with: open \"${FINAL_APP_PATH}\""
+else
+  echo "==> Launch with: open \"${FINAL_APP_PATH}\""
+fi
