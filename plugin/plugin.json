@@ -1,0 +1,14 @@
+{
+  "name": "quick-capture",
+  "version": "0.1.0",
+  "description": "Reads the most recent screenshot captured by Antigravity Quick Entry on macOS.",
+  "mcpServers": {
+    "quick-capture": {
+      "command": "node",
+      "args": ["${PLUGIN_DIR}/mcp-server/index.mjs"]
+    }
+  },
+  "skills": [
+    "skills/quick-capture"
+  ]
+}

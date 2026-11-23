@@ -1,0 +1,15 @@
+# SwiftPM & Xcode
+.build/
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+dist/
+
+# Node / Optional Plugin
+node_modules/
+*.log
+
+# macOS
+.DS_Store
+*.swp
